@@ -1929,7 +1929,7 @@ function ProductSheet(_ref9) {
     size: 17,
     color: "#4A5BC4"
   })), /*#__PURE__*/React.createElement("button", {
-    onClick: handleBuscarCosmos,
+    onClick: () => handleBuscarCosmos(),
     disabled: buscandoCosmos,
     style: {
       ...S.btn("ghost"),
@@ -2403,7 +2403,7 @@ const saveUsers = v => {
     active: u.active !== false,
     created_at: u.createdAt || Date.now()
   }));
-  fetch("https://jyrugkklsacswgysjser.supabase.co/rest/v1/users?on_conflict=id", {
+  fetch(SUPABASE_URL + "/rest/v1/users?on_conflict=id", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -2418,7 +2418,7 @@ const loadUsersFromSupabase = async () => {
   const key = localStorage.getItem('_sb_key') || "";
   if (!key) return null;
   try {
-    const r = await fetch("https://jyrugkklsacswgysjser.supabase.co/rest/v1/users?select=*&active=eq.true", {
+    const r = await fetch(SUPABASE_URL + "/rest/v1/users?select=*&active=eq.true", {
       headers: {
         "apikey": key,
         "Authorization": "Bearer " + key
