@@ -224,7 +224,10 @@ const buscarProdutoCosmos = async (gtin) => {
   try {
     const r = await fetch(SUPABASE_URL + '/functions/v1/cosmos-lookup?gtin=' + encodeURIComponent(codigo), {
       method: 'GET',
-      headers: _SB_H(),
+      headers: {
+        'apikey': _SB_KEY(),
+        'Authorization': 'Bearer ' + _SB_KEY()
+      },
       signal: _timeoutSignal(10000)
     });
     const data = await r.json();
