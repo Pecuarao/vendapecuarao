@@ -206,7 +206,7 @@ const retryTombstones = async () => {
 
 // ── BANCO DE DADOS: SERVIDOR É A FONTE ÚNICA DE VERDADE ───────────────────────
 // ── SUPABASE DIRETO ──────────────────────────────────────────────────────────
-const SUPABASE_URL = "https://jyrugkklsacswgysjser.supabase.co";
+const SUPABASE_URL = localStorage.getItem('_sb_url') || "https://jyrugkklsacswgysjser.supabase.co";
 const _SB_KEY = () => localStorage.getItem('_sb_key') || sessionStorage.getItem('_sb_key') || "";
 const _SB_H = () => ({
   'Content-Type': 'application/json',
@@ -2375,6 +2375,10 @@ const loadUsersFromSupabase = async () => {
 };
 function KeySetupScreen(_ref1) {
   let onDone = _ref1.onDone;
+  const _useState0 = useState(localStorage.getItem('_sb_url') || ""),
+    _useState0b = _slicedToArray(_useState0, 2),
+    url = _useState0b[0],
+    setUrl = _useState0b[1];
   const _useState1 = useState(localStorage.getItem('_sb_key') || ""),
     _useState10 = _slicedToArray(_useState1, 2),
     key = _useState10[0],
@@ -2388,14 +2392,23 @@ function KeySetupScreen(_ref1) {
     msg = _useState14[0],
     setMsg = _useState14[1];
   const testar = async () => {
+    const urlLimpa = url.trim().replace(/\/+$/, "");
+    if (!urlLimpa) {
+      setMsg("❌ Cole a Project URL do Supabase");
+      return;
+    }
+    if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(urlLimpa)) {
+      setMsg("❌ URL inválida. Formato esperado: https://xxxxx.supabase.co");
+      return;
+    }
     if (!key.trim()) {
-      setMsg("Cole a chave acima");
+      setMsg("❌ Cole a chave acima");
       return;
     }
     setTesting(true);
     setMsg("Testando conexão...");
     try {
-      const r = await fetch("https://jyrugkklsacswgysjser.supabase.co/rest/v1/rpc/get_all_data", {
+      const r = await fetch(urlLimpa + "/rest/v1/rpc/get_all_data", {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2406,13 +2419,14 @@ function KeySetupScreen(_ref1) {
         signal: _timeoutSignal(8000)
       });
       if (r.ok) {
+        localStorage.setItem('_sb_url', urlLimpa);
         localStorage.setItem('_sb_key', key.trim());
         sessionStorage.setItem('_sb_key', key.trim());
-        setMsg("✅ Conectado!");
-        setTimeout(() => onDone(), 1000);
+        setMsg("✅ Conectado! Recarregando...");
+        setTimeout(() => window.location.reload(), 1000);
       } else {
         const e = await r.text();
-        setMsg("❌ Erro: " + e.slice(0, 80));
+        setMsg("❌ Erro: " + e.slice(0, 120));
       }
     } catch (e) {
       setMsg("❌ " + e.message);
@@ -2452,7 +2466,11 @@ function KeySetupScreen(_ref1) {
       marginBottom: 24,
       textAlign: "center"
     }
-  }, "Cole a chave ", /*#__PURE__*/React.createElement("b", {
+  }, "Cole a ", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: "var(--text-primary)"
+    }
+  }, "Project URL"), " e a chave ", /*#__PURE__*/React.createElement("b", {
     style: {
       color: "var(--text-primary)"
     }
@@ -2460,17 +2478,47 @@ function KeySetupScreen(_ref1) {
     style: {
       color: "var(--text-primary)"
     }
-  }, "Chaves JWT"), " \u2192 anon key", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("span", {
+  }, "API Keys"), /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 10,
       color: "#E8682A"
     }
-  }, "(come\xE7a com eyJhbGci...)")), /*#__PURE__*/React.createElement("div", {
+  }, "(URL: https://xxxxx.supabase.co / chave: come\xE7a com eyJhbGci...)")), /*#__PURE__*/React.createElement("div", {
     style: {
       width: "100%",
       maxWidth: 420
     }
-  }, /*#__PURE__*/React.createElement("textarea", {
+  }, /*#__PURE__*/React.createElement("label", {
+    style: {
+      fontSize: 11,
+      color: "var(--text-secondary)",
+      display: "block",
+      marginBottom: 4
+    }
+  }, "Project URL"), /*#__PURE__*/React.createElement("input", {
+    value: url,
+    onChange: e => setUrl(e.target.value),
+    placeholder: "https://xxxxxxxxxxxxx.supabase.co",
+    style: {
+      width: "100%",
+      background: "var(--bg-card)",
+      border: "1px solid var(--bg-elevated)",
+      borderRadius: 10,
+      color: "var(--text-primary)",
+      padding: 12,
+      fontSize: 12,
+      fontFamily: "monospace",
+      boxSizing: "border-box",
+      marginBottom: 12
+    }
+  }), /*#__PURE__*/React.createElement("label", {
+    style: {
+      fontSize: 11,
+      color: "var(--text-secondary)",
+      display: "block",
+      marginBottom: 4
+    }
+  }, "Chave anon (JWT)"), /*#__PURE__*/React.createElement("textarea", {
     value: key,
     onChange: e => setKey(e.target.value),
     placeholder: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6...",
@@ -2526,11 +2574,19 @@ function KeySetupScreen(_ref1) {
     style: {
       color: "var(--text-primary)"
     }
-  }, "Onde encontrar a chave:"), /*#__PURE__*/React.createElement("br", null), "Supabase \u2192 Configura\xE7\xF5es \u2192 Chaves de API \u2192", /*#__PURE__*/React.createElement("br", null), "aba \"Legadas\" \u2192 copie a chave ", /*#__PURE__*/React.createElement("b", {
+  }, "Onde encontrar:"), /*#__PURE__*/React.createElement("br", null), "Supabase \u2192 Configura\xE7\xF5es \u2192 Chaves de API \u2192", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("b", {
     style: {
       color: "#E8682A"
     }
-  }, "anon"))));
+  }, "Project URL"), " fica no topo da p\xE1gina", /*#__PURE__*/React.createElement("br", null), "Para a chave: aba \"Legadas\" \u2192 copie a chave ", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: "#E8682A"
+    }
+  }, "anon"), ". Se n\xE3o tiver essa aba, use a chave ", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: "#E8682A"
+    }
+  }, "publishable"), " (come\xE7a com sb_publishable_...)")));
 }
 function LoginScreen(_ref10) {
   let onLogin = _ref10.onLogin,
@@ -7828,7 +7884,7 @@ function EntregasPage(_ref24) {
     const pgStatus = ped.pagamento || "";
     const pgLabel = pgStatus === "pago" ? "✅ PAGO" : pgStatus === "troco" ? "💵 LEVAR TROCO" : pgStatus === "maquina" ? "📲 LEVAR MÁQUINA" : pgStatus === "troco_maquina" ? "💵📲 LEVAR TROCO + MÁQUINA" : "";
     const pgColor = pgStatus === "pago" ? "#27ae60" : "#e74c3c";
-    const html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + ped.numero + "</title><style>" + css + "</style></head><body>" + "<div style='background:#2D3A8C;color:#fff;padding:14px;text-align:center;border-radius:8px;margin-bottom:16px'>" + "<img src='" + LOGO_SRC + "' alt='logo' style='height:48px;margin-bottom:8px'/>" + "<div style='font-size:15px;font-weight:800;letter-spacing:1px'>PEDIDO DE ENTREGA</div>" + "<div style='font-size:11px;margin-top:3px;opacity:.85'>" + ped.numero + " · " + ped.criadoData + " " + ped.criadoHora + "</div>" + "</div>" + "<div style='background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-bottom:12px;font-size:12px'>" + "<div style='display:flex;justify-content:space-between;margin-bottom:4px'>" + "<span><b>Status:</b> " + st.emoji + " " + st.label + "</span>" + "<span><b>Total:</b> <span style='color:#2D3A8C;font-weight:800'>" + fmt(ped.total) + "</span></span></div>" + "<b>Cliente:</b> " + ped.cliente + (ped.telefone ? " · 📞" + ped.telefone : "") + "<br>" + (ped.endereco ? "<b>Endereço:</b> 📍" + ped.endereco + "<br>" : "") + "</div>" + "<table><thead><tr><th>Produto</th><th style='text-align:center'>Qtd</th><th style='text-align:right'>Valor</th></tr></thead><tbody>" + itemRows + "</tbody></table>" + "<div class='total'>TOTAL: " + fmt(ped.total) + "</div>" + (pgLabel ? "<div style='margin-top:10px;padding:10px;border-radius:6px;border:2px solid " + pgColor + ";font-size:13px;font-weight:800;text-align:center;color:" + pgColor + "'>" + pgLabel + "</div>" : "") + (ped.obs ? "<div style='background:#fffbeb;border:1px solid #fef08a;padding:8px;border-radius:6px;font-size:12px;margin-top:8px'><b>Obs:</b> " + ped.obs + "</div>" : "") + "<div style='border-top:2px solid #2D3A8C;margin-top:20px;padding-top:14px;font-size:11px;color:#888;text-align:center'>" + "Assinatura do recebedor: _______________________________<br><br>Data: _____ / _____ / _______" + "</div>" + "</body></html>";
+    const html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + ped.numero + "</title><style>" + css + "</style></head><body>" + "<div style='background:#2D3A8C;color:#fff;padding:14px;border-radius:8px;margin-bottom:16px;display:flex;align-items:center;gap:12px'>" + "<img src='" + LOGO_SRC + "' alt='logo' style='height:40px;flex-shrink:0'/>" + "<div style='text-align:left'>" + "<div style='font-size:15px;font-weight:800;letter-spacing:1px'>PEDIDO DE ENTREGA</div>" + "<div style='font-size:11px;margin-top:3px;opacity:.85'>" + ped.numero + " · " + ped.criadoData + " " + ped.criadoHora + "</div>" + "</div>" + "</div>" + "<div style='background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-bottom:12px;font-size:12px'>" + "<div style='display:flex;justify-content:space-between;margin-bottom:4px'>" + "<span><b>Status:</b> " + st.emoji + " " + st.label + "</span>" + "<span><b>Total:</b> <span style='color:#2D3A8C;font-weight:800'>" + fmt(ped.total) + "</span></span></div>" + "<b>Cliente:</b> " + ped.cliente + (ped.telefone ? " · 📞" + ped.telefone : "") + "<br>" + (ped.endereco ? "<b>Endereço:</b> 📍" + ped.endereco + "<br>" : "") + "</div>" + "<table><thead><tr><th>Produto</th><th style='text-align:center'>Qtd</th><th style='text-align:right'>Valor</th></tr></thead><tbody>" + itemRows + "</tbody></table>" + "<div class='total'>TOTAL: " + fmt(ped.total) + "</div>" + (pgLabel ? "<div style='margin-top:10px;padding:10px;border-radius:6px;border:2px solid " + pgColor + ";font-size:13px;font-weight:800;text-align:center;color:" + pgColor + "'>" + pgLabel + "</div>" : "") + (ped.obs ? "<div style='background:#fffbeb;border:1px solid #fef08a;padding:8px;border-radius:6px;font-size:12px;margin-top:8px'><b>Obs:</b> " + ped.obs + "</div>" : "") + "<div style='border-top:2px solid #2D3A8C;margin-top:20px;padding-top:14px;font-size:11px;color:#888;text-align:center'>" + "Assinatura do recebedor: _______________________________<br><br>Data: _____ / _____ / _______" + "</div>" + "</body></html>";
     // Usa iframe para evitar bloqueio de popup
     const iframe = document.createElement("iframe");
     iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
@@ -10787,7 +10843,7 @@ function PDVApp() {
     const endCli = cliente ? [cliente.rua && cliente.rua + (cliente.numero ? ", " + cliente.numero : ""), cliente.bairro, cliente.cidade && cliente.cidade + (cliente.uf ? " - " + cliente.uf : "")].filter(Boolean).join(", ") : "";
     const promissoria = isPrazo ? gerarNotaPromissoria((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer, (cliente === null || cliente === void 0 ? void 0 : cliente.cpf) || "", endCli, (cliente === null || cliente === void 0 ? void 0 : cliente.phone) || "", s.total, dataStr, s.id.slice(-6).toUpperCase()) : "";
     const css = "body{font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;color:#111;}table{width:100%;border-collapse:collapse;font-size:13px;}th{background:#f3f4f6;padding:7px 8px;text-align:left;font-size:11px;text-transform:uppercase;}td{padding:7px 8px;border-bottom:1px solid #f3f4f6;}.total{font-size:17px;font-weight:700;text-align:right;margin-top:8px;color:#e74c3c;}@media print{body{max-width:100%;padding:10px}}";
-    return "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Recibo</title><style>" + css + "</style></head><body>" + "<div style='background:#2D3A8C;color:#fff;padding:14px;text-align:center;border-radius:8px;margin-bottom:16px'>" + "<img src='" + LOGO_SRC + "' alt='logo' style='height:48px;margin-bottom:8px'/>" + "<div style='font-size:16px;font-weight:800;letter-spacing:1px'>RECIBO DE VENDA</div>" + "<div style='font-size:11px;margin-top:4px'>" + s.date + " " + s.time + " · Nº " + s.id.slice(-8).toUpperCase() + "</div></div>" + "<div style='background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px;margin-bottom:14px'>" + "<div style='font-size:11px;color:#888;text-transform:uppercase;margin-bottom:4px'>Cliente</div>" + "<div style='font-weight:700;font-size:14px'>" + ((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer) + "</div>" + (cliente !== null && cliente !== void 0 && cliente.cpf ? "<div style='font-size:12px;color:#666'>CPF/CNPJ: " + cliente.cpf + "</div>" : "") + (cliente !== null && cliente !== void 0 && cliente.phone ? "<div style='font-size:12px;color:#666'>Tel: " + cliente.phone + "</div>" : "") + (endCli ? "<div style='font-size:12px;color:#666'>" + endCli + "</div>" : "") + "</div>" + "<table><thead><tr><th>Produto</th><th>Qtd</th><th>Total</th></tr></thead><tbody>" + itemRows + "</tbody></table>" + "<div class='total'>TOTAL: " + fmt(s.total) + "</div>" + "<div style='display:flex;justify-content:space-between;margin-top:8px;font-size:12px;color:#666'>" + "<span>Pagamento: <b>" + s.payment + "</b></span>" + (isPrazo ? "<span style='color:#c0392b;font-weight:700'>⚠️ A PRAZO</span>" : "") + "</div>" + "<div style='margin-top:20px;border-top:2px solid #2D3A8C;padding-top:14px;text-align:center'>" + "<div style='font-size:12px;color:#E8682A;font-style:italic'>Obrigado pela preferência! 🐾</div>" + "</div>" + promissoria + "</body></html>";
+    return "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Recibo</title><style>" + css + "</style></head><body>" + "<div style='background:#2D3A8C;color:#fff;padding:14px;border-radius:8px;margin-bottom:16px;display:flex;align-items:center;gap:12px'>" + "<img src='" + LOGO_SRC + "' alt='logo' style='height:40px;flex-shrink:0'/>" + "<div style='text-align:left'>" + "<div style='font-size:16px;font-weight:800;letter-spacing:1px'>RECIBO DE VENDA</div>" + "<div style='font-size:11px;margin-top:4px'>" + s.date + " " + s.time + " · Nº " + s.id.slice(-8).toUpperCase() + "</div>" + "</div></div>" + "<div style='background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px;margin-bottom:14px'>" + "<div style='font-size:11px;color:#888;text-transform:uppercase;margin-bottom:4px'>Cliente</div>" + "<div style='font-weight:700;font-size:14px'>" + ((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer) + "</div>" + (cliente !== null && cliente !== void 0 && cliente.cpf ? "<div style='font-size:12px;color:#666'>CPF/CNPJ: " + cliente.cpf + "</div>" : "") + (cliente !== null && cliente !== void 0 && cliente.phone ? "<div style='font-size:12px;color:#666'>Tel: " + cliente.phone + "</div>" : "") + (endCli ? "<div style='font-size:12px;color:#666'>" + endCli + "</div>" : "") + "</div>" + "<table><thead><tr><th>Produto</th><th>Qtd</th><th>Total</th></tr></thead><tbody>" + itemRows + "</tbody></table>" + "<div class='total'>TOTAL: " + fmt(s.total) + "</div>" + "<div style='display:flex;justify-content:space-between;margin-top:8px;font-size:12px;color:#666'>" + "<span>Pagamento: <b>" + s.payment + "</b></span>" + (isPrazo ? "<span style='color:#c0392b;font-weight:700'>⚠️ A PRAZO</span>" : "") + "</div>" + "<div style='margin-top:20px;border-top:2px solid #2D3A8C;padding-top:14px;text-align:center'>" + "<div style='font-size:12px;color:#E8682A;font-style:italic'>Obrigado pela preferência! 🐾</div>" + "</div>" + promissoria + "</body></html>";
   };
   const imprimirRecibo = s => {
     const cliente = customers.find(c => c.name === s.customer);
