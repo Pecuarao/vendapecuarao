@@ -215,6 +215,26 @@ const _SB_H = () => ({
   'Prefer': 'return=representation'
 });
 
+// ── BUSCA DE PRODUTO POR CÓDIGO DE BARRAS (Cosmos, via Edge Function) ────────
+// Consulta a Edge Function 'cosmos-lookup' criada no Supabase, que por sua vez
+// chama a API do Cosmos (Bluesoft) com o token guardado nos Secrets do projeto.
+const buscarProdutoCosmos = async (gtin) => {
+  const codigo = (gtin || '').trim();
+  if (!codigo) return { ok: false, error: 'Código de barras vazio' };
+  try {
+    const r = await fetch(SUPABASE_URL + '/functions/v1/cosmos-lookup?gtin=' + encodeURIComponent(codigo), {
+      method: 'GET',
+      headers: _SB_H(),
+      signal: _timeoutSignal(10000)
+    });
+    const data = await r.json();
+    if (!r.ok) return { ok: false, error: data.error || ('Erro ' + r.status) };
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+};
+
 // ── CACHE DE FOTOS (IndexedDB) ────────────────────────────────────────────────
 // Armazena fotos localmente — não vai pro servidor, fica no aparelho
 const _photoDB = {
@@ -1358,6 +1378,37 @@ function ProductSheet(_ref9) {
     _useStateBE4 = _slicedToArray(_useStateBE3, 2),
     scanBCExtra = _useStateBE4[0],
     setScanBCExtra = _useStateBE4[1];
+  const _useStateCM1 = useState(false),
+    _useStateCM2 = _slicedToArray(_useStateCM1, 2),
+    buscandoCosmos = _useStateCM2[0],
+    setBuscandoCosmos = _useStateCM2[1];
+  const _useStateCM3 = useState(""),
+    _useStateCM4 = _slicedToArray(_useStateCM3, 2),
+    cosmosMsg = _useStateCM4[0],
+    setCosmosMsg = _useStateCM4[1];
+  const handleBuscarCosmos = async (codigoDireto) => {
+    const codigo = codigoDireto || form.barcode;
+    if (!codigo.trim()) {
+      setCosmosMsg("Digite ou escaneie um código de barras primeiro");
+      return;
+    }
+    setBuscandoCosmos(true);
+    setCosmosMsg("Buscando...");
+    const res = await buscarProdutoCosmos(codigo);
+    setBuscandoCosmos(false);
+    if (!res.ok) {
+      setCosmosMsg("❌ " + res.error);
+      return;
+    }
+    const d = res.data;
+    setForm(f => ({
+      ...f,
+      name: f.name.trim() ? f.name : (d.description || f.name),
+      description: f.description.trim() ? f.description : ([d.brand, d.gpc_description].filter(Boolean).join(" · ") || f.description),
+      photo: f.photo || d.thumbnail || f.photo
+    }));
+    setCosmosMsg(d.description ? "✓ Encontrado: " + d.description : "Produto não encontrado na base do Cosmos");
+  };
   const addExtraBarcode = code => {
     const c = (code || "").trim();
     if (!c) return;
@@ -1877,7 +1928,25 @@ function ProductSheet(_ref9) {
     name: "camera",
     size: 17,
     color: "#4A5BC4"
-  }))), form.barcode && /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement("button", {
+    onClick: handleBuscarCosmos,
+    disabled: buscandoCosmos,
+    style: {
+      ...S.btn("ghost"),
+      padding: "10px 13px",
+      border: "1px solid #4ade8040",
+      color: "#16a34a",
+      background: "#4ade8010",
+      flexShrink: 0,
+      opacity: buscandoCosmos ? 0.5 : 1
+    }
+  }, buscandoCosmos ? "..." : "🔍")), cosmosMsg && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 4,
+      fontSize: 11,
+      color: cosmosMsg.startsWith("❌") ? "#f87171" : "#4ade80"
+    }
+  }, cosmosMsg), form.barcode && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 4,
       fontSize: 11,
@@ -1890,6 +1959,7 @@ function ProductSheet(_ref9) {
     onCode: code => {
       set("barcode", code);
       setScanBC(false);
+      setTimeout(() => handleBuscarCosmos(code), 200);
     },
     onClose: () => setScanBC(false)
   }), /*#__PURE__*/React.createElement("div", {
