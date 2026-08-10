@@ -9712,6 +9712,10 @@ function RelatoriosPage(_refRel) {
     _rD2B = _slicedToArray(_rD2, 2),
     dataFim = _rD2B[0],
     setDataFim = _rD2B[1];
+  const _rCli = useState(""),
+    _rCliB = _slicedToArray(_rCli, 2),
+    clienteFiltro = _rCliB[0],
+    setClienteFiltro = _rCliB[1];
 
   // Custo atual de um produto pelo nome (usado nos cálculos de lucro)
   const custoDe = nome => {
@@ -9825,6 +9829,40 @@ function RelatoriosPage(_refRel) {
       mapa[nome].qtd += 1;
     });
     return Object.values(mapa).sort((a, b) => b.total - a.total);
+  })();
+
+  // Lista de nomes de clientes para o seletor (cadastrados + os que aparecem em vendas avulsas)
+  const nomesClientesParaFiltro = (() => {
+    const nomes = new Set((customers || []).map(c => c.name));
+    vendasPer.forEach(s => nomes.add(s.customer || "Avulso"));
+    return Array.from(nomes).filter(Boolean).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  })();
+
+  // Detalhe do cliente selecionado: produtos comprados (agrupados) + total do período
+  const relClienteDetalhe = (() => {
+    if (!clienteFiltro) return null;
+    const vendasCliente = vendasPer.filter(s => (s.customer || "Avulso") === clienteFiltro);
+    const produtosMap = {};
+    let total = 0;
+    vendasCliente.forEach(s => {
+      total += s.total || 0;
+      (s.items || []).forEach(i => {
+        const nome = i.name || "Item";
+        if (!produtosMap[nome]) produtosMap[nome] = {
+          nome,
+          qtd: 0,
+          subtotal: 0
+        };
+        produtosMap[nome].qtd += i.qty || 0;
+        produtosMap[nome].subtotal += (i.price || 0) * (i.qty || 0);
+      });
+    });
+    return {
+      cliente: clienteFiltro,
+      qtdCompras: vendasCliente.length,
+      total,
+      produtos: Object.values(produtosMap).sort((a, b) => b.subtotal - a.subtotal)
+    };
   })();
 
   // ── PAGAMENTO ──
@@ -9942,8 +9980,14 @@ function RelatoriosPage(_refRel) {
       titulo = "Relatório de Comissões";
       corpo = "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Vendedor</th><th " + th + " style='text-align:center'>Vendas</th><th " + th + " style='text-align:right'>Pendente</th><th " + th + " style='text-align:right'>Pago</th><th " + th + " style='text-align:right'>Total</th></tr>" + relComissao.lista.map(c => "<tr><td " + td + ">" + c.nome + "</td><td " + tdC + ">" + c.qtd + "</td><td " + tdR + ">" + fmt(c.pendente) + "</td><td " + tdR + ">" + fmt(c.pago) + "</td><td " + tdR + "><b>" + fmt(c.total) + "</b></td></tr>").join("") + "<tr><td " + td + " colspan='4'><b>Total geral</b></td><td " + tdR + "><b>" + fmt(relComissao.geral) + "</b></td></tr></table>";
     } else if (tipo === "clientes") {
-      titulo = "Relatório de Clientes";
-      corpo = "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Cliente</th><th " + th + " style='text-align:center'>Compras</th><th " + th + " style='text-align:right'>Total</th></tr>" + relClientes.map(c => "<tr><td " + td + ">" + c.nome + "</td><td " + tdC + ">" + c.qtd + "</td><td " + tdR + ">" + fmt(c.total) + "</td></tr>").join("") + "</table>";
+      if (relClienteDetalhe) {
+        const det = relClienteDetalhe;
+        titulo = "Relatório de Cliente — " + det.cliente;
+        corpo = "<p style='font-size:13px'><b>Compras no período:</b> " + det.qtdCompras + " &nbsp;&nbsp; <b>Total gasto:</b> " + fmt(det.total) + "</p>" + "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Produto</th><th " + th + " style='text-align:center'>Qtd</th><th " + th + " style='text-align:right'>Subtotal</th></tr>" + det.produtos.map(p => "<tr><td " + td + ">" + p.nome + "</td><td " + tdC + ">" + p.qtd + "</td><td " + tdR + ">" + fmt(p.subtotal) + "</td></tr>").join("") + "<tr><td " + td + " colspan='2'><b>Total</b></td><td " + tdR + "><b>" + fmt(det.total) + "</b></td></tr></table>";
+      } else {
+        titulo = "Relatório de Clientes";
+        corpo = "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Cliente</th><th " + th + " style='text-align:center'>Compras</th><th " + th + " style='text-align:right'>Total</th></tr>" + relClientes.map(c => "<tr><td " + td + ">" + c.nome + "</td><td " + tdC + ">" + c.qtd + "</td><td " + tdR + ">" + fmt(c.total) + "</td></tr>").join("") + "</table>";
+      }
     } else if (tipo === "pagamento") {
       titulo = "Relatório de Meios de Pagamento";
       corpo = "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Forma</th><th " + th + " style='text-align:center'>Qtd</th><th " + th + " style='text-align:right'>Total</th></tr>" + relPagamento.map(p => "<tr><td " + td + ">" + p.forma + "</td><td " + tdC + ">" + p.qtd + "</td><td " + tdR + ">" + fmt(p.total) + "</td></tr>").join("") + "</table>";
@@ -10052,7 +10096,23 @@ function RelatoriosPage(_refRel) {
     },
     value: dataFim,
     onChange: e => setDataFim(e.target.value)
-  })), /*#__PURE__*/React.createElement("button", {
+  })), tipo === "clientes" && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("select", {
+    value: clienteFiltro,
+    onChange: e => setClienteFiltro(e.target.value),
+    style: {
+      ...S.input,
+      fontSize: 13
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "\uD83D\uDC65 Todos os clientes (ranking)"), nomesClientesParaFiltro.map(nome => /*#__PURE__*/React.createElement("option", {
+    key: nome,
+    value: nome
+  }, nome)))), /*#__PURE__*/React.createElement("button", {
     onClick: gerarPDF,
     style: {
       ...S.btn("ghost"),
@@ -10072,6 +10132,7 @@ function RelatoriosPage(_refRel) {
     relLucro,
     relComissao,
     relClientes,
+    relClienteDetalhe,
     relPagamento,
     relProdutos,
     relEstoque,
@@ -10225,6 +10286,36 @@ function renderRelatorioConteudo(tipo, d) {
     }, "Mostrando os 30 de maior valor. O PDF traz todos."));
   }
   if (tipo === "clientes") {
+    if (d.relClienteDetalhe) {
+      const det = d.relClienteDetalhe;
+      if (det.produtos.length === 0) return vazio("Nenhuma compra de " + det.cliente + " no período.");
+      return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 12,
+          paddingBottom: 10,
+          borderBottom: "1px solid var(--bg-elevated)"
+        }
+      }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontWeight: 800,
+          fontSize: 15
+        }
+      }, det.cliente), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 12,
+          color: "var(--text-secondary)"
+        }
+      }, det.qtdCompras, " compra(s) no per\xEDodo")), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontWeight: 800,
+          fontSize: 17,
+          color: "#f59e0b"
+        }
+      }, fmt(det.total))), det.produtos.map((p, i) => linha(p.nome + " (" + (p.qtd % 1 !== 0 ? p.qtd.toFixed(2).replace(/\.?0+$/, "") : p.qtd) + "x)", fmt(p.subtotal), i === 0 ? "#f59e0b" : null)));
+    }
     if (d.relClientes.length === 0) return vazio("Nenhuma venda no período.");
     return /*#__PURE__*/React.createElement("div", null, d.relClientes.map((c, i) => linha((i + 1) + ". " + c.nome + " (" + c.qtd + ")", fmt(c.total), i === 0 ? "#f59e0b" : null)));
   }
