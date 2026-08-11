@@ -94,6 +94,53 @@ const LOJA = {
   endereco: "Rua Guarani, 461 - Jardim Candidés",
   cidade: "Divinópolis/MG"
 };
+
+// ── BALANÇA COM CÓDIGO DE BARRAS (peso/preço embutido) ───────────────────────
+// Padrão comum (Urano, Toledo, Filizola): EAN-13 começando com um dígito fixo
+// (geralmente "2"), seguido do código do produto (PLU) e do peso/preço,
+// terminando num dígito verificador. A quantidade de dígitos de cada parte
+// pode variar conforme a configuração da balança — por isso é ajustável aqui.
+const BALANCA_CFG_DEFAULT = {
+  ativo: false,
+  prefixo: "2",
+  pluDigitos: 6,
+  // dígitos 2 a 7 (6 dígitos) = código do produto (PLU)
+  valorDigitos: 5,
+  // dígitos 8 a 12 (5 dígitos) = peso ou preço
+  tipo: "peso" // "peso" (gramas) ou "preco" (centavos)
+};
+const getBalancaCfg = () => {
+  try {
+    const raw = localStorage.getItem("_balanca_cfg");
+    if (raw) return { ...BALANCA_CFG_DEFAULT, ...JSON.parse(raw) };
+  } catch (e) {}
+  return { ...BALANCA_CFG_DEFAULT };
+};
+const setBalancaCfg = cfg => {
+  localStorage.setItem("_balanca_cfg", JSON.stringify(cfg));
+};
+// Tenta decodificar um código de barras de balança. Retorna null se não bater
+// com o padrão configurado (nesse caso, trata-se de um código normal).
+const decodeBalancaBarcode = code => {
+  const cfg = getBalancaCfg();
+  if (!cfg.ativo) return null;
+  const c = (code || "").trim();
+  if (!/^\d{13}$/.test(c)) return null;
+  if (c[0] !== String(cfg.prefixo)) return null;
+  const pluLen = +cfg.pluDigitos;
+  const valLen = +cfg.valorDigitos;
+  if (1 + pluLen + valLen + 1 !== 13) return null;
+  const plu = c.slice(1, 1 + pluLen);
+  const valorStr = c.slice(1 + pluLen, 1 + pluLen + valLen);
+  const valor = parseInt(valorStr, 10);
+  if (isNaN(valor)) return null;
+  return {
+    plu,
+    valor,
+    tipo: cfg.tipo
+  };
+};
+
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const nowTime = () => new Date().toTimeString().slice(0, 5);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -428,6 +475,7 @@ const _toRow = {
     min_stock: +(p.minStock || 5),
     unit: p.unit || 'unid',
     barcode: p.barcode || '',
+    plu_balanca: p.pluBalanca || '',
     barcodes_extra: Array.isArray(p.barcodesExtra) ? p.barcodesExtra : [],
     photo: p.photo || '',
     description: p.description || '',
@@ -1011,6 +1059,218 @@ function DeleteSheet(_ref7) {
   }, "Remover"))));
 }
 
+// ── CONFIGURAÇÃO DA BALANÇA (código de barras com peso/preço embutido) ──────
+function BalancaCfgModal(_ref7b) {
+  let S = _ref7b.S,
+    onClose = _ref7b.onClose;
+  const _c1 = useState(getBalancaCfg()),
+    _c2 = _slicedToArray(_c1, 2),
+    cfg = _c2[0],
+    setCfg = _c2[1];
+  const set = (k, v) => setCfg(c => ({
+    ...c,
+    [k]: v
+  }));
+  const totalDigitos = 1 + (+cfg.pluDigitos || 0) + (+cfg.valorDigitos || 0) + 1;
+  const valido = totalDigitos === 13;
+  const salvar = () => {
+    if (!valido) return;
+    setBalancaCfg(cfg);
+    onClose();
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "fixed",
+      inset: 0,
+      background: "rgba(0,0,0,.6)",
+      zIndex: 300,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.card,
+      width: "100%",
+      maxWidth: 420,
+      padding: 20,
+      maxHeight: "90vh",
+      overflowY: "auto"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 16,
+      fontWeight: 800,
+      marginBottom: 4
+    }
+  }, "\u2696\uFE0F Configurar Balan\xE7a"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "var(--text-secondary)",
+      marginBottom: 16
+    }
+  }, "Ajuste conforme a configura\xE7\xE3o real da sua balan\xE7a. Se n\xE3o souber, deixe o padr\xE3o (Urano POP-Z) e teste bipando uma etiqueta."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginBottom: 16,
+      padding: 12,
+      background: "var(--bg-elevated)",
+      borderRadius: 10
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 13,
+      fontWeight: 600
+    }
+  }, "Ativar leitura de balan\xE7a"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => set("ativo", !cfg.ativo),
+    style: {
+      width: 44,
+      height: 24,
+      borderRadius: 12,
+      border: "none",
+      background: cfg.ativo ? "#4ade80" : "#3a3d50",
+      position: "relative",
+      cursor: "pointer"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 18,
+      height: 18,
+      borderRadius: "50%",
+      background: "#fff",
+      position: "absolute",
+      top: 3,
+      left: cfg.ativo ? 23 : 3,
+      transition: "left .15s"
+    }
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.lbl,
+      marginBottom: 5
+    }
+  }, "D\xEDgito de prefixo (geralmente 2)"), /*#__PURE__*/React.createElement("input", {
+    style: S.input,
+    type: "text",
+    maxLength: 1,
+    value: cfg.prefixo,
+    onChange: e => set("prefixo", e.target.value.replace(/\D/g, "").slice(0, 1) || "2")
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.lbl,
+      marginBottom: 5
+    }
+  }, "D\xEDgitos do PLU"), /*#__PURE__*/React.createElement("input", {
+    style: S.input,
+    type: "number",
+    min: 1,
+    max: 10,
+    value: cfg.pluDigitos,
+    onChange: e => set("pluDigitos", e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.lbl,
+      marginBottom: 5
+    }
+  }, "D\xEDgitos do valor"), /*#__PURE__*/React.createElement("input", {
+    style: S.input,
+    type: "number",
+    min: 1,
+    max: 10,
+    value: cfg.valorDigitos,
+    onChange: e => set("valorDigitos", e.target.value)
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.lbl,
+      marginBottom: 5
+    }
+  }, "O que os d\xEDgitos de valor representam?"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => set("tipo", "peso"),
+    style: {
+      flex: 1,
+      padding: "10px",
+      borderRadius: 8,
+      border: cfg.tipo === "peso" ? "2px solid #4A5BC4" : "1px solid var(--bg-elevated)",
+      background: cfg.tipo === "peso" ? "#4A5BC420" : "var(--bg-elevated)",
+      color: "var(--text-primary)",
+      cursor: "pointer",
+      fontSize: 13,
+      fontWeight: 600
+    }
+  }, "Peso (gramas)"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => set("tipo", "preco"),
+    style: {
+      flex: 1,
+      padding: "10px",
+      borderRadius: 8,
+      border: cfg.tipo === "preco" ? "2px solid #4A5BC4" : "1px solid var(--bg-elevated)",
+      background: cfg.tipo === "preco" ? "#4A5BC420" : "var(--bg-elevated)",
+      color: "var(--text-primary)",
+      cursor: "pointer",
+      fontSize: 13,
+      fontWeight: 600
+    }
+  }, "Pre\xE7o (centavos)"))), !valido && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "#f87171",
+      marginBottom: 12,
+      padding: 10,
+      background: "#f8717120",
+      borderRadius: 8
+    }
+  }, "\u26A0\uFE0F A soma (1 prefixo + ", cfg.pluDigitos || 0, " PLU + ", cfg.valorDigitos || 0, " valor + 1 verificador) precisa dar exatamente 13 d\xEDgitos. Hoje d\xE1 ", totalDigitos, "."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      ...S.btn("ghost"),
+      flex: 1
+    }
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    onClick: salvar,
+    disabled: !valido,
+    style: {
+      ...S.btn("primary"),
+      flex: 1,
+      opacity: valido ? 1 : 0.5
+    }
+  }, "Salvar"))));
+}
+
 // ── SCANNERS ───────────────────────────────────────────────────────────────────
 function ScannerBase(_ref8) {
   let S = _ref8.S,
@@ -1357,6 +1617,7 @@ function ProductSheet(_ref9) {
       unit: (initial === null || initial === void 0 ? void 0 : initial.unit) || "unid",
       barcode: (initial === null || initial === void 0 ? void 0 : initial.barcode) || "",
       barcodesExtra: (initial === null || initial === void 0 ? void 0 : initial.barcodesExtra) || [],
+      pluBalanca: (initial === null || initial === void 0 ? void 0 : initial.pluBalanca) || "",
       photo: (initial === null || initial === void 0 ? void 0 : initial.photo) || "",
       description: (initial === null || initial === void 0 ? void 0 : initial.description) || ""
     }),
@@ -1389,6 +1650,10 @@ function ProductSheet(_ref9) {
     _useStateCM4 = _slicedToArray(_useStateCM3, 2),
     cosmosMsg = _useStateCM4[0],
     setCosmosMsg = _useStateCM4[1];
+  const _useStateCM5 = useState(null),
+    _useStateCM6 = _slicedToArray(_useStateCM5, 2),
+    cosmosResultado = _useStateCM6[0],
+    setCosmosResultado = _useStateCM6[1];
   const handleBuscarCosmos = async (codigoDireto) => {
     const codigo = codigoDireto || form.barcode;
     if (!codigo.trim()) {
@@ -1397,6 +1662,7 @@ function ProductSheet(_ref9) {
     }
     setBuscandoCosmos(true);
     setCosmosMsg("Buscando...");
+    setCosmosResultado(null);
     const res = await buscarProdutoCosmos(codigo);
     setBuscandoCosmos(false);
     if (!res.ok) {
@@ -1404,13 +1670,25 @@ function ProductSheet(_ref9) {
       return;
     }
     const d = res.data;
-    setForm(f => ({
-      ...f,
-      name: f.name.trim() ? f.name : (d.description || f.name),
-      description: f.description.trim() ? f.description : ([d.brand, d.gpc_description].filter(Boolean).join(" · ") || f.description),
-      photo: f.photo || d.thumbnail || f.photo
-    }));
-    setCosmosMsg(d.description ? "✓ Encontrado: " + d.description : "Produto não encontrado na base do Cosmos");
+    if (!d.description) {
+      setCosmosMsg("Produto não encontrado na base do Cosmos");
+      return;
+    }
+    setCosmosResultado(d);
+    setCosmosMsg("✓ Encontrado: " + d.description);
+  };
+  const usarCosmosNome = () => {
+    if (!cosmosResultado) return;
+    set("name", cosmosResultado.description);
+  };
+  const usarCosmosDescricao = () => {
+    if (!cosmosResultado) return;
+    const partes = [cosmosResultado.brand, cosmosResultado.gpc_description].filter(Boolean);
+    set("description", partes.length ? partes.join(" · ") : cosmosResultado.description);
+  };
+  const usarCosmosFoto = () => {
+    if (!cosmosResultado || !cosmosResultado.thumbnail) return;
+    set("photo", cosmosResultado.thumbnail);
   };
   const addExtraBarcode = code => {
     const c = (code || "").trim();
@@ -1706,7 +1984,50 @@ function ProductSheet(_ref9) {
     placeholder: "0,00",
     value: form.costPrice,
     onChange: e => set("costPrice", e.target.value)
-  })), /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      marginTop: 6,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      const q = (form.barcode || form.name || "").trim();
+      if (!q) {
+        setCosmosMsg("Preencha o código de barras ou o nome antes de buscar");
+        return;
+      }
+      window.open("https://www.martinsatacado.com.br/martins/pt/BRL/search/?text=" + encodeURIComponent(q), "_blank");
+    },
+    style: {
+      ...S.btn("ghost"),
+      padding: "6px 11px",
+      fontSize: 11,
+      border: "1px solid #22d3ee40",
+      color: "#22d3ee",
+      background: "#22d3ee10"
+    }
+  }, "\uD83D\uDD17 Ver no Martins"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      const q = (form.barcode || form.name || "").trim();
+      if (!q) {
+        setCosmosMsg("Preencha o código de barras ou o nome antes de buscar");
+        return;
+      }
+      window.open("https://tambasa.com/busca?s=" + encodeURIComponent(q), "_blank");
+    },
+    style: {
+      ...S.btn("ghost"),
+      padding: "6px 11px",
+      fontSize: 11,
+      border: "1px solid #22d3ee40",
+      color: "#22d3ee",
+      background: "#22d3ee10"
+    }
+  }, "\uD83D\uDD17 Ver na Tambasa"))), /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 12
     }
@@ -1949,7 +2270,44 @@ function ProductSheet(_ref9) {
       fontSize: 11,
       color: cosmosMsg.startsWith("❌") ? "#f87171" : "#4ade80"
     }
-  }, cosmosMsg), form.barcode && /*#__PURE__*/React.createElement("div", {
+  }, cosmosMsg), cosmosResultado && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap",
+      marginTop: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: usarCosmosNome,
+    style: {
+      ...S.btn("ghost"),
+      padding: "5px 10px",
+      fontSize: 11,
+      border: "1px solid #4A5BC440",
+      color: "#4A5BC4",
+      background: "#4A5BC410"
+    }
+  }, "\u2713 Usar como nome"), /*#__PURE__*/React.createElement("button", {
+    onClick: usarCosmosDescricao,
+    style: {
+      ...S.btn("ghost"),
+      padding: "5px 10px",
+      fontSize: 11,
+      border: "1px solid #4A5BC440",
+      color: "#4A5BC4",
+      background: "#4A5BC410"
+    }
+  }, "\u2713 Usar como descri\xE7\xE3o"), cosmosResultado.thumbnail && /*#__PURE__*/React.createElement("button", {
+    onClick: usarCosmosFoto,
+    style: {
+      ...S.btn("ghost"),
+      padding: "5px 10px",
+      fontSize: 11,
+      border: "1px solid #4A5BC440",
+      color: "#4A5BC4",
+      background: "#4A5BC410"
+    }
+  }, "\u2713 Usar foto")), form.barcode && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 4,
       fontSize: 11,
@@ -1966,6 +2324,27 @@ function ProductSheet(_ref9) {
     },
     onClose: () => setScanBC(false)
   }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.lbl,
+      marginBottom: 5
+    }
+  }, "C\xF3digo da Balan\xE7a (PLU)"), /*#__PURE__*/React.createElement("input", {
+    style: S.input,
+    type: "text",
+    placeholder: "Ex: 001234 (cadastrado na balan\xE7a)",
+    value: form.pluBalanca || "",
+    onChange: e => set("pluBalanca", e.target.value.replace(/\D/g, ""))
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "var(--text-secondary)",
+      marginTop: 4
+    }
+  }, "Preencha s\xF3 se este produto for pesado na balan\xE7a. Precisa ser o mesmo c\xF3digo (PLU) cadastrado nela.")), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 14
     }
@@ -10593,6 +10972,10 @@ function PDVApp() {
     _useState230 = _slicedToArray(_useState229, 2),
     scannerOpen = _useState230[0],
     setScannerOpen = _useState230[1];
+  const _useStateBAL1 = useState(false),
+    _useStateBAL2 = _slicedToArray(_useStateBAL1, 2),
+    balancaCfgOpen = _useStateBAL2[0],
+    setBalancaCfgOpen = _useStateBAL2[1];
   const _useState231 = useState(null),
     _useState232 = _slicedToArray(_useState231, 2),
     photoModal = _useState232[0],
@@ -10752,6 +11135,7 @@ function PDVApp() {
       unit: form.unit || "unid",
       barcode: form.barcode || "",
       barcodesExtra: Array.isArray(form.barcodesExtra) ? form.barcodesExtra : [],
+      pluBalanca: (form.pluBalanca || "").trim(),
       photo: form.photo || "",
       description: form.description || ""
     };
@@ -12276,6 +12660,19 @@ function PDVApp() {
     size: 17,
     color: "#4A5BC4"
   })), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setBalancaCfgOpen(true),
+    title: "Configurar balan\xE7a",
+    style: {
+      ...S.btn("ghost"),
+      padding: "10px 12px",
+      flexShrink: 0,
+      borderRadius: 10
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "sliders",
+    size: 17,
+    color: "#94a3b8"
+  })), /*#__PURE__*/React.createElement("button", {
     onClick: () => setShowFilters(f => !f),
     style: {
       ...S.btn(showFilters ? "primary" : "ghost"),
@@ -12692,6 +13089,47 @@ function PDVApp() {
     subtitle: "Aponte para o c\xF3digo de barras do produto",
     onCode: code => {
       const c = code.trim();
+      const bal = decodeBalancaBarcode(c);
+      if (bal) {
+        const p = products.find(x => x.pluBalanca && x.pluBalanca.trim() === bal.plu);
+        if (!p) {
+          notify("Produto da balança não encontrado (PLU " + bal.plu + ")", "warn");
+          setScannerOpen(false);
+          return;
+        }
+        if (bal.tipo === "peso") {
+          const pesoKg = bal.valor / 1000;
+          setCart(cc => {
+            const ex = cc.find(i => i.id === p.id);
+            if (ex) return cc.map(i => i.id === p.id ? {
+              ...i,
+              qty: +(i.qty + pesoKg).toFixed(3)
+            } : i);
+            return [...cc, {
+              ...p,
+              qty: +pesoKg.toFixed(3)
+            }];
+          });
+          notify(p.name + " · " + pesoKg.toFixed(3) + "kg ✓", "info");
+        } else {
+          const totalReais = bal.valor / 100;
+          const pesoKg = p.price > 0 ? +(totalReais / p.price).toFixed(3) : 0;
+          setCart(cc => {
+            const ex = cc.find(i => i.id === p.id);
+            if (ex) return cc.map(i => i.id === p.id ? {
+              ...i,
+              qty: +(i.qty + pesoKg).toFixed(3)
+            } : i);
+            return [...cc, {
+              ...p,
+              qty: pesoKg
+            }];
+          });
+          notify(p.name + " · " + fmt(totalReais) + " ✓", "info");
+        }
+        setScannerOpen(false);
+        return;
+      }
       const p = products.find(x => (x.barcode && x.barcode.trim() === c) || (Array.isArray(x.barcodesExtra) && x.barcodesExtra.some(b => b.trim() === c)));
       if (p) {
         addToCart(p);
@@ -12700,6 +13138,9 @@ function PDVApp() {
       setScannerOpen(false);
     },
     onClose: () => setScannerOpen(false)
+  }), balancaCfgOpen && /*#__PURE__*/React.createElement(BalancaCfgModal, {
+    S: S,
+    onClose: () => setBalancaCfgOpen(false)
   }))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: page === "atacado" ? "block" : "none"
