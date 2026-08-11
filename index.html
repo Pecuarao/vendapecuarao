@@ -1994,9 +1994,9 @@ function ProductSheet(_ref9) {
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: () => {
-      const q = (form.barcode || form.name || "").trim();
+      const q = (form.name || form.description || form.barcode || "").trim();
       if (!q) {
-        setCosmosMsg("Preencha o código de barras ou o nome antes de buscar");
+        setCosmosMsg("Preencha o nome do produto antes de buscar");
         return;
       }
       window.open("https://www.martinsatacado.com.br/martins/pt/BRL/search/?text=" + encodeURIComponent(q), "_blank");
@@ -2012,9 +2012,9 @@ function ProductSheet(_ref9) {
   }, "\uD83D\uDD17 Ver no Martins"), /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: () => {
-      const q = (form.barcode || form.name || "").trim();
+      const q = (form.name || form.description || form.barcode || "").trim();
       if (!q) {
-        setCosmosMsg("Preencha o código de barras ou o nome antes de buscar");
+        setCosmosMsg("Preencha o nome do produto antes de buscar");
         return;
       }
       window.open("https://tambasa.com/busca?s=" + encodeURIComponent(q), "_blank");
