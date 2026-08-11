@@ -4334,6 +4334,10 @@ function CartDrawer(_ref18) {
     _useState78 = _slicedToArray(_useState77, 2),
     infoNameVal = _useState78[0],
     setInfoNameVal = _useState78[1];
+  const _useStateAPC = useState(false),
+    _useStateAPC2 = _slicedToArray(_useStateAPC, 2),
+    atualizarPrecoCadastro = _useStateAPC2[0],
+    setAtualizarPrecoCadastro = _useStateAPC2[1];
   const isAvulso = saleCustomer === "Avulso";
   const cliObj = customers.find(c => c.name === saleCustomer);
   const endFmt = cliObj ? [cliObj.rua && cliObj.rua + (cliObj.numero ? ", " + cliObj.numero : ""), cliObj.bairro, cliObj.cidade && cliObj.cidade + (cliObj.uf ? " - " + cliObj.uf : ""), cliObj.cep && "CEP: " + cliObj.cep].filter(Boolean).join(" · ") : "";
@@ -4344,6 +4348,7 @@ function CartDrawer(_ref18) {
     setEditQty(String(item.qty));
     setEditTotal(String(+(item.price * item.qty).toFixed(2)));
     setModoTotal(false);
+    setAtualizarPrecoCadastro(false);
   };
   const closeEdit = () => setEditItem(null);
   const confirmEdit = () => {
@@ -4366,7 +4371,7 @@ function CartDrawer(_ref18) {
       price: p,
       qty: q
     });
-    if (orig && onUpdateProduct) {
+    if (orig && onUpdateProduct && atualizarPrecoCadastro) {
       const changed = novoNome && novoNome !== orig.name || p !== orig.price;
       if (changed) onUpdateProduct(editItem, {
         name: novoNome || orig.name,
@@ -4585,7 +4590,51 @@ function CartDrawer(_ref18) {
       color: "#E8682A",
       marginTop: 4
     }
-  }, "Total: ", fmt(parseFloat(editPreco) * parseFloat(editQty)))), /*#__PURE__*/React.createElement("div", {
+  }, "Total: ", fmt(parseFloat(editPreco) * parseFloat(editQty)))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setAtualizarPrecoCadastro(v => !v),
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      width: "100%",
+      background: "none",
+      border: "none",
+      cursor: "pointer",
+      padding: "6px 0",
+      marginBottom: 8,
+      fontFamily: "inherit",
+      textAlign: "left"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 18,
+      height: 18,
+      borderRadius: 5,
+      border: "2px solid " + (atualizarPrecoCadastro ? "#E8682A" : "var(--icon-muted)"),
+      background: atualizarPrecoCadastro ? "#E8682A" : "transparent",
+      flexShrink: 0,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center"
+    }
+  }, atualizarPrecoCadastro && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "#fff",
+      fontSize: 11,
+      fontWeight: 900
+    }
+  }, "\u2713")), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: "var(--text-secondary)"
+    }
+  }, "Atualizar tamb\xE9m o pre\xE7o cadastrado deste produto", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      opacity: 0.8
+    }
+  }, atualizarPrecoCadastro ? "✓ Vai valer para as próximas vendas também" : "Desconto vale só para esta venda"))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8
@@ -7188,6 +7237,10 @@ function ImportarPage(_ref21) {
     statusMsg = _useState140[0],
     setStatusMsg = _useState140[1];
   const fileRef = useRef(null);
+  const _useStateSCB = useState(null),
+    _useStateSCB2 = _slicedToArray(_useStateSCB, 2),
+    scanningIdx = _useStateSCB2[0],
+    setScanningIdx = _useStateSCB2[1];
   const getCategoria = nome => {
     const d = nome.toLowerCase();
     if (/torneira|valvula|reparo|sifao|tubo|hidro|ducha|chuveiro|registro/.test(d)) return "Hidráulica";
@@ -7711,6 +7764,44 @@ function ImportarPage(_ref21) {
     }))
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.lbl,
+      marginBottom: 4
+    }
+  }, "C\xF3digo de Barras"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...S.input,
+      fontSize: 13,
+      flex: 1
+    },
+    value: editForm.barcode || "",
+    placeholder: "Sem c\xF3digo",
+    onChange: e => setEditForm(f => ({
+      ...f,
+      barcode: e.target.value
+    }))
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setScanningIdx(idx),
+    style: {
+      ...S.btn("ghost"),
+      padding: "0 12px",
+      flexShrink: 0
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "camera",
+    size: 15,
+    color: "#4A5BC4"
+  })))), /*#__PURE__*/React.createElement("div", {
+    style: {
       display: "grid",
       gridTemplateColumns: "1fr 1fr",
       gap: 8,
@@ -7878,9 +7969,24 @@ function ImportarPage(_ref21) {
     style: S.badge("#a78bfa")
   }, prod.categoria), prod.unitsPerBox > 1 && /*#__PURE__*/React.createElement("span", {
     style: S.badge("#f59e0b")
-  }, prod.unitsPerBox, " un/emb"), prod.barcode && /*#__PURE__*/React.createElement("span", {
-    style: S.badge("#4ade80")
-  }, "EAN: ", prod.barcode)), prod.observacao ? /*#__PURE__*/React.createElement("div", {
+  }, prod.unitsPerBox, " un/emb"), prod.barcode ? /*#__PURE__*/React.createElement("button", {
+    onClick: () => setScanningIdx(idx),
+    title: "Toque para bipar outro c\xF3digo",
+    style: {
+      ...S.badge("#4ade80"),
+      border: "none",
+      cursor: "pointer",
+      fontFamily: "inherit"
+    }
+  }, "EAN: ", prod.barcode) : /*#__PURE__*/React.createElement("button", {
+    onClick: () => setScanningIdx(idx),
+    style: {
+      ...S.badge("#f87171"),
+      border: "none",
+      cursor: "pointer",
+      fontFamily: "inherit"
+    }
+  }, "\uD83D\uDCF7 Sem c\xF3digo \u2014 bipar")), prod.observacao ? /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       color: "var(--text-secondary)",
@@ -7927,7 +8033,27 @@ function ImportarPage(_ref21) {
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "import",
     size: 15
-  }), " Importar ", parsed.filter(p => p.selected).length)));
+  }), " Importar ", parsed.filter(p => p.selected).length)), scanningIdx !== null && /*#__PURE__*/React.createElement(ScannerBase, {
+    S: S,
+    title: "Bipar C\xF3digo do Produto",
+    subtitle: (parsed[scanningIdx] === null || parsed[scanningIdx] === void 0 ? void 0 : parsed[scanningIdx].nome) || "",
+    onCode: code => {
+      const c = (code || "").trim();
+      setParsed(p => p.map((x, i) => i === scanningIdx ? {
+        ...x,
+        barcode: c
+      } : x));
+      if (editingIdx === scanningIdx) {
+        setEditForm(f => ({
+          ...f,
+          barcode: c
+        }));
+      }
+      notify("C\xF3digo vinculado \u2713");
+      setScanningIdx(null);
+    },
+    onClose: () => setScanningIdx(null)
+  }));
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
