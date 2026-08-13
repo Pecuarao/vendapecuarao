@@ -79,6 +79,104 @@ const fmt = v => Number(v || 0).toLocaleString("pt-BR", {
   style: "currency",
   currency: "BRL"
 });
+// ── MOTOR DE COMPARAÇÃO DE PRODUTOS (NF-e/CSV/PDF/TXT vs. cadastro) ──────────
+// Normaliza texto: remove acentos, pontuação, deixa maiúsculo, espaços únicos
+const _normDesc = s => (s || "").toString().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+const _STOPWORDS = new Set(["DE", "DA", "DO", "PARA", "COM", "E", "OU", "EM", "UN", "UNID", "UNIDADE"]);
+const _tokens = s => _normDesc(s).split(" ").filter(t => t.length >= 2 && !_STOPWORDS.has(t));
+// Extrai padrão peso/volume tipo "50KG", "20 KG", "500ML", "1L" pra usar como critério extra
+const _pesoVol = s => {
+  const m = _normDesc(s).match(/(\d+(?:[.,]\d+)?)\s*(KG|G|ML|L|UN|CX|PCT|SC)\b/);
+  if (!m) return null;
+  return (parseFloat(m[1].replace(",", ".")) || 0) + m[2];
+};
+// Similaridade de Dice entre dois conjuntos de tokens (0 a 1)
+const _diceSim = (t1, t2) => {
+  if (t1.length === 0 || t2.length === 0) return 0;
+  const s1 = new Set(t1),
+    s2 = new Set(t2);
+  let inter = 0;
+  s1.forEach(t => {
+    if (s2.has(t)) inter++;
+  });
+  return 2 * inter / (s1.size + s2.size);
+};
+// Calcula score de 0 a 100 comparando um item importado (nfItem: {nome, barcode})
+// com um produto já cadastrado (prod: {name, barcode})
+const computeMatchScore = (nfItem, prod) => {
+  const eanNF = (nfItem.barcode || "").trim();
+  const eanProd = (prod.barcode || "").trim();
+  if (eanNF && eanProd && eanNF === eanProd) return 100;
+  const t1 = _tokens(nfItem.nome || nfItem.name);
+  const t2 = _tokens(prod.name);
+  let score = Math.round(_diceSim(t1, t2) * 100);
+  const p1 = _pesoVol(nfItem.nome || nfItem.name);
+  const p2 = _pesoVol(prod.name);
+  if (p1 && p2) {
+    if (p1 === p2) score = Math.min(100, score + 12);else score = Math.max(0, score - 35); // pesos diferentes quase sempre = produto diferente
+  }
+  return Math.max(0, Math.min(100, score));
+};
+// Acha o melhor candidato entre os produtos já cadastrados
+const findBestMatch = (nfItem, produtos) => {
+  let best = null,
+    bestScore = -1;
+  for (const p of produtos) {
+    const s = computeMatchScore(nfItem, p);
+    if (s > bestScore) {
+      bestScore = s;
+      best = p;
+    }
+  }
+  if (!best) return null;
+  return {
+    id: best.id,
+    name: best.name,
+    score: bestScore
+  };
+};
+// Enriquece a lista importada com sugestão de vínculo + decisão inicial
+const enrichComMatches = (prods, produtosExistentes) => prods.map(p => {
+  const match = findBestMatch(p, produtosExistentes || []);
+  let decision = "novo",
+    matchId = null,
+    matchName = null,
+    matchScore = 0;
+  if (match) {
+    matchId = match.id;
+    matchName = match.name;
+    matchScore = match.score;
+    if (match.score >= 95) decision = "auto";else if (match.score >= 75) decision = "pending";else decision = "novo";
+  }
+  return {
+    ...p,
+    matchId,
+    matchName,
+    matchScore,
+    matchDecision: decision
+  };
+});
+// Imprime um HTML usando iframe oculto — funciona em navegador, Android (WebView)
+// e no app Windows (Electron), onde window.open("", "_blank") costuma ser bloqueado.
+const printHTMLDoc = html => {
+  const iframe = document.createElement("iframe");
+  iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
+  document.body.appendChild(iframe);
+  iframe.contentDocument.open();
+  iframe.contentDocument.write(html);
+  iframe.contentDocument.close();
+  setTimeout(() => {
+    try {
+      iframe.contentWindow.focus();
+      iframe.contentWindow.print();
+    } catch (e) {}
+    setTimeout(() => {
+      try {
+        document.body.removeChild(iframe);
+      } catch (e) {}
+    }, 2000);
+  }, 600);
+};
 // Polyfill para AbortSignal.timeout (iOS Safari < 16 não tem)
 const _timeoutSignal = ms => {
   const c = new AbortController();
@@ -148,7 +246,6 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 // items: array de { name, price, barcode }
 function printElginLabels(items, layout) {
   if (!items || items.length === 0) return;
-  const w = window.open("", "_blank");
   const pageCss = layout === "1col" ? "@page{size:30mm 60mm;margin:0}body{margin:0}" : "@page{size:20mm 30mm;margin:0}body{margin:0}";
   const labelCss = layout === "1col" ? "width:30mm;height:60mm;padding:2mm 1.5mm;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;align-items:center;page-break-after:always;text-align:center;" : "width:20mm;height:30mm;padding:1mm;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;align-items:center;page-break-after:always;text-align:center;";
   const nomeSize = layout === "1col" ? "11px" : "7px";
@@ -160,8 +257,24 @@ function printElginLabels(items, layout) {
     return "<div class='label'>" + "<div style='font-size:" + nomeSize + ";font-weight:700;line-height:1.15;max-height:2.4em;overflow:hidden'>" + nome + "</div>" + "<div style='font-size:" + precoSize + ";font-weight:900;color:#000;margin:1mm 0'>" + preco + "</div>" + (code ? "<svg class='bc' data-code='" + code + "'></svg><div style='font-size:6px;letter-spacing:1px'>" + code + "</div>" : "") + "</div>";
   }).join("");
   const html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Etiquetas</title>" + "<style>" + pageCss + "*{font-family:Arial,sans-serif}.label{" + labelCss + "border:0}" + (layout === "3col" ? ".wrap{display:flex;flex-wrap:wrap}" : "") + "</style></head><body>" + "<div class='wrap'>" + labelsHtml + "</div>" + "<script src='https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js'><" + "/script>" + "<script>" + "window.onload=function(){" + "document.querySelectorAll('.bc').forEach(function(el){" + "try{JsBarcode(el, el.getAttribute('data-code'), {format:'CODE128',width:1.3,height:28,displayValue:false,margin:0});}catch(e){}" + "});" + "setTimeout(function(){window.print();},350);" + "};" + "<" + "/script>" + "</body></html>";
-  w.document.write(html);
-  w.document.close();
+  // Usa iframe oculto (evita bloqueio de pop-up no Electron/Windows e Android)
+  const iframe = document.createElement("iframe");
+  iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
+  document.body.appendChild(iframe);
+  iframe.contentDocument.open();
+  iframe.contentDocument.write(html);
+  iframe.contentDocument.close();
+  setTimeout(() => {
+    try {
+      iframe.contentWindow.focus();
+      iframe.contentWindow.print();
+    } catch (e) {}
+    setTimeout(() => {
+      try {
+        document.body.removeChild(iframe);
+      } catch (e) {}
+    }, 2000);
+  }, 600);
 }
 const load = (k, d) => {
   try {
@@ -1999,7 +2112,7 @@ function ProductSheet(_ref9) {
         setCosmosMsg("Preencha o nome do produto antes de buscar");
         return;
       }
-      window.open("https://www.martinsatacado.com.br/martins/pt/BRL/search/?text=" + encodeURIComponent(q), "_blank");
+      window.open("https://www.google.com/search?tbm=shop&q=" + encodeURIComponent(q), "_blank");
     },
     style: {
       ...S.btn("ghost"),
@@ -2009,7 +2122,7 @@ function ProductSheet(_ref9) {
       color: "#22d3ee",
       background: "#22d3ee10"
     }
-  }, "\uD83D\uDD17 Ver no Martins"), /*#__PURE__*/React.createElement("button", {
+  }, "\uD83D\uDD17 Ver pre\xE7o (Google Shop)"), /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: () => {
       const q = (form.name || form.description || form.barcode || "").trim();
@@ -3473,17 +3586,8 @@ function UsersPage(_ref11) {
     const totalVendido = vendas.reduce((s, v) => s + (v.total || 0), 0);
     const mkRow = (s, isPaga) => "<tr style='background:" + (isPaga ? "#f0fdf4" : "#fffbeb") + "'>" + "<td>" + s.date + " " + s.time + "</td>" + "<td>" + s.customer + "</td>" + "<td>" + (s.items || []).map(i => i.qty + "× " + i.name).join(", ") + "</td>" + "<td style='text-align:right'>" + fmt(s.total) + "</td>" + "<td style='text-align:right;font-weight:700;color:" + (isPaga ? "#16a34a" : "#ca8a04") + "'>" + fmt(s.comissaoValor || 0) + "</td>" + "<td style='text-align:center'>" + (isPaga ? "✅ Pago em " + (s.comissaoPagaEm || "") : "⏳ Pendente") + "</td>" + "</tr>";
     const rows = [...pagas, ...pendentes].map(s => mkRow(s, !!s.comissaoPaga)).join("");
-    const html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Comissão " + u.name + "</title>" + "<style>body{font-family:Arial,sans-serif;max-width:800px;margin:0 auto;padding:20px;}" + "table{width:100%;border-collapse:collapse;font-size:11px;}" + "th{background:#1a1a2e;color:#fff;padding:7px;text-align:left;font-size:10px;}" + "td{padding:6px 7px;border-bottom:1px solid #eee;}</style></head><body>" + "<div style='background:#1a1a2e;color:#fff;padding:16px;border-radius:8px;margin-bottom:16px'>" + "<div style='font-size:20px;font-weight:800'>💰 Relatório de Comissão — " + u.name + "</div>" + "<div style='font-size:12px;margin-top:4px;opacity:.8'>Período: " + de + " a " + (ate || todayStr()) + "</div></div>" + "<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px'>" + "<div style='background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:10px'><div style='font-size:9px;color:#888;text-transform:uppercase'>Total Vendido</div><div style='font-size:16px;font-weight:800;color:#16a34a'>" + fmt(totalVendido) + "</div></div>" + "<div style='background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px'><div style='font-size:9px;color:#888;text-transform:uppercase'>Nº Vendas</div><div style='font-size:16px;font-weight:800;color:#2563eb'>" + vendas.length + "</div></div>" + "<div style='background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:10px'><div style='font-size:9px;color:#888;text-transform:uppercase'>✅ Comissão Paga</div><div style='font-size:16px;font-weight:800;color:#16a34a'>" + fmt(totalPago) + "</div></div>" + "<div style='background:#fefce8;border:1px solid #fef08a;border-radius:6px;padding:10px'><div style='font-size:9px;color:#888;text-transform:uppercase'>⏳ A Pagar</div><div style='font-size:16px;font-weight:800;color:#ca8a04'>" + fmt(totalPendente) + "</div></div>" + "</div>" + "<table><thead><tr><th>Data</th><th>Cliente</th><th>Itens</th><th>Venda</th><th>Comissão</th><th>Status</th></tr></thead><tbody>" + rows + "</tbody>" + "<tfoot><tr style='background:#1a1a2e;color:#fff;font-weight:700'><td colspan='3'>TOTAL</td><td>" + fmt(totalVendido) + "</td><td>" + fmt(totalPago + totalPendente) + "</td><td></td></tr></tfoot>" + "</table>" + "<div style='margin-top:16px;font-size:10px;color:#aaa;text-align:center'>Gerado em " + new Date().toLocaleString("pt-BR") + "</div>" + "</body></html>";
-    const w = window.open("", "_blank", "width=820,height=650");
-    if (w) {
-      w.document.write(html);
-      w.document.close();
-      setTimeout(() => {
-        try {
-          w.print();
-        } catch (_) {}
-      }, 600);
-    } else notify("Permita pop-ups.", "warn");
+    const html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Comissão " + u.name + "</title>" + "<style>*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}body{font-family:Arial,sans-serif;max-width:800px;margin:0 auto;padding:20px;}" + "table{width:100%;border-collapse:collapse;font-size:11px;}" + "th{background:#1a1a2e;color:#fff;padding:7px;text-align:left;font-size:10px;}" + "td{padding:6px 7px;border-bottom:1px solid #eee;}</style></head><body>" + "<div style='background:#1a1a2e;color:#fff;padding:16px;border-radius:8px;margin-bottom:16px'>" + "<div style='font-size:20px;font-weight:800'>💰 Relatório de Comissão — " + u.name + "</div>" + "<div style='font-size:12px;margin-top:4px;opacity:.8'>Período: " + de + " a " + (ate || todayStr()) + "</div></div>" + "<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px'>" + "<div style='background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:10px'><div style='font-size:9px;color:#888;text-transform:uppercase'>Total Vendido</div><div style='font-size:16px;font-weight:800;color:#16a34a'>" + fmt(totalVendido) + "</div></div>" + "<div style='background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px'><div style='font-size:9px;color:#888;text-transform:uppercase'>Nº Vendas</div><div style='font-size:16px;font-weight:800;color:#2563eb'>" + vendas.length + "</div></div>" + "<div style='background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:10px'><div style='font-size:9px;color:#888;text-transform:uppercase'>✅ Comissão Paga</div><div style='font-size:16px;font-weight:800;color:#16a34a'>" + fmt(totalPago) + "</div></div>" + "<div style='background:#fefce8;border:1px solid #fef08a;border-radius:6px;padding:10px'><div style='font-size:9px;color:#888;text-transform:uppercase'>⏳ A Pagar</div><div style='font-size:16px;font-weight:800;color:#ca8a04'>" + fmt(totalPendente) + "</div></div>" + "</div>" + "<table><thead><tr><th>Data</th><th>Cliente</th><th>Itens</th><th>Venda</th><th>Comissão</th><th>Status</th></tr></thead><tbody>" + rows + "</tbody>" + "<tfoot><tr style='background:#1a1a2e;color:#fff;font-weight:700'><td colspan='3'>TOTAL</td><td>" + fmt(totalVendido) + "</td><td>" + fmt(totalPago + totalPendente) + "</td><td></td></tr></tfoot>" + "</table>" + "<div style='margin-top:16px;font-size:10px;color:#aaa;text-align:center'>Gerado em " + new Date().toLocaleString("pt-BR") + "</div>" + "</body></html>";
+    printHTMLDoc(html);
   };
 
   // Painel de detalhe do usuário
@@ -7241,6 +7345,14 @@ function ImportarPage(_ref21) {
     _useStateSCB2 = _slicedToArray(_useStateSCB, 2),
     scanningIdx = _useStateSCB2[0],
     setScanningIdx = _useStateSCB2[1];
+  const _useStateLI = useState(null),
+    _useStateLI2 = _slicedToArray(_useStateLI, 2),
+    lastImport = _useStateLI2[0],
+    setLastImport = _useStateLI2[1];
+  const _useStateOF = useState("xml"),
+    _useStateOF2 = _slicedToArray(_useStateOF, 2),
+    origemFormato = _useStateOF2[0],
+    setOrigemFormato = _useStateOF2[1]; // "xml" (NF-e, entra direto no estoque) ou "orcamento" (PDF/CSV/TXT, vai pra Lista de Compras)
   const getCategoria = nome => {
     const d = nome.toLowerCase();
     if (/torneira|valvula|reparo|sifao|tubo|hidro|ducha|chuveiro|registro/.test(d)) return "Hidráulica";
@@ -7452,6 +7564,98 @@ function ImportarPage(_ref21) {
     if (produtos.length === 0) throw new Error("Nenhum produto encontrado. Verifique se é um orçamento no formato correto.");
     return produtos;
   };
+  // ── PARSER: "Relatório Negociação Pedido" (formato: CODIGO DESCRIÇÃO QTD UNT LIQ C.P NCM) ──
+  // ── PARSER: "Pedido de Venda" (Nova Casa / ION Sistemas) — tem código de barras! ──
+  // Colunas: # COD DESCRIÇÃO EMBALAGEM UNID COD.BARRAS QTDE PREÇO_UN [PREÇO_TOTAL na linha seguinte] [EMBALAGEM na próxima]
+  const parsePedidoVendaPDF = text => {
+    const linhas = text.split("\n").map(l => l.trim()).filter(Boolean);
+    // Formato real: "{#} {COD} {DESCRIÇÃO...} {EMBALAGEM} {UNID} {BARCODE} {QTDE} {PREÇO_UN}"
+    // A embalagem fica DENTRO da descrição (antes do UNID final), não numa linha separada.
+    // O preço total de cada linha aparece numa linha própria ANTES da linha do item (ignorado — não precisamos dele).
+    const reRow = /^(\d{1,3})\s+(\d{3,6})\s+(.+)\s+([A-Z]{2,3})\s+(\d{8,14})\s+(\d{1,4})\s+\$?(\d+[.,]\d{2})\b/;
+    // Multiplicador SÓ é aceito quando o padrão "C/NNNN UNID" está bem no final da descrição
+    // (ex: "...CORR PT C/0100 UN"). Isso evita confundir com "C/50" que às vezes é parte do
+    // próprio nome do produto (ex: "ESPAC PORC... PCT C/50 1 PT" — aqui o "C/50" é do nome,
+    // o multiplicador real é 1, indicado pelo "1 PT" no fim).
+    const reEmbFim = /C\/?0*(\d{1,4})\s+[A-Z]{2,4}$/;
+    // Limpeza cosmética: remove um "1 PT" / "01 UN" / "12 UN" / "1 RL" solto no final do nome
+    const reCauda = /\s+\d{1,3}\s+[A-Z]{2,3}$/;
+    const pNum = v => parseFloat((v || "0").replace(",", "."));
+    const produtos = [];
+    for (const linha of linhas) {
+      const m = linha.match(reRow);
+      if (!m) continue;
+      let desc = m[3].trim();
+      const barcode = m[5];
+      const qtd = parseInt(m[6]) || 1;
+      const precoPacote = pNum(m[7]);
+      if (precoPacote <= 0 || !desc) continue;
+      let mult = 1;
+      const mEmb = desc.match(reEmbFim);
+      if (mEmb) {
+        mult = parseInt(mEmb[1]) || 1;
+        desc = desc.slice(0, mEmb.index).trim();
+      } else {
+        desc = desc.replace(reCauda, "").trim();
+      }
+      const precoUnitario = mult > 1 ? +(precoPacote / mult).toFixed(2) : precoPacote;
+      const estoque = qtd * mult;
+      produtos.push({
+        id: uid(),
+        nomeOriginal: desc,
+        nome: desc.slice(0, 60),
+        categoria: getCategoria(desc),
+        quantidade: qtd,
+        unidade: "UN",
+        unitsPerBox: mult,
+        precoUnitario,
+        estoque,
+        barcode,
+        observacao: mult > 1 ? mult + " un/emb → " + fmt(precoUnitario) + "/un" : "",
+        selected: true
+      });
+    }
+    if (produtos.length === 0) throw new Error("Nenhum produto encontrado neste pedido de venda.");
+    return produtos;
+  };
+  const parseNegociacaoPDF = text => {
+    const linhas = text.split("\n").map(l => l.trim()).filter(Boolean);
+    const reCodStart = /^(\d{5,7})\s+(.+)$/;
+    // tail: QTD  UNT(preço com até 4 casas)  LIQ(preço 2 casas)  C.P(código)  NCM(6-8 dígitos), no fim da linha
+    const reTail = /^(.*?)\s+(\d{1,4})\s+(\d+[.,]\d{2,4})\s+(\d+[.,]\d{2})\s+(\d{2,6})\s+(\d{6,8})\s*$/;
+    const isFooter = l => /^(CLIENTE:|ATEN[ÇC][ÃA]O!|Status da Negocia|GERADO EM:|QUANTIDADE DE ITENS|VALOR)/i.test(l);
+    const pNum = v => parseFloat((v || "0").replace(",", "."));
+    const produtos = [];
+    let i = 0;
+    while (i < linhas.length) {
+      const mStart = linhas[i].match(reCodStart);
+      if (!mStart) {
+        i++;
+        continue;
+      }
+      const cod = mStart[1];
+      let desc = mStart[2];
+      i++;
+      // Tenta achar o "rabo" numérico (QTD/UNT/LIQ/C.P/NCM) já nesta linha ou nas próximas (descrição pode quebrar linha)
+      let tailMatch = desc.match(reTail);
+      let tentativas = 0;
+      while (!tailMatch && i < linhas.length && tentativas < 4) {
+        if (isFooter(linhas[i]) || reCodStart.test(linhas[i])) break;
+        desc += " " + linhas[i];
+        tailMatch = desc.match(reTail);
+        i++;
+        tentativas++;
+      }
+      if (!tailMatch) continue; // não conseguiu achar os números — pula
+      const descLimpa = tailMatch[1].trim();
+      const qtd = parseInt(tailMatch[2]) || 1;
+      const unitPrice = pNum(tailMatch[3]);
+      if (unitPrice <= 0 || !descLimpa) continue;
+      produtos.push(makeProduto(cod + " " + descLimpa, "UN", qtd, unitPrice, ""));
+    }
+    if (produtos.length === 0) throw new Error("Nenhum produto encontrado neste relatório de negociação.");
+    return produtos;
+  };
   const parseTXT = text => {
     const LIXO = /^[-=*.]{4,}$|^[A-Z]{30,}$|DANFE|CHAVE DE ACESSO|CNPJ|FONE|PROTOCOLO|TRANSPORTADOR|COMPROVANTE|BOLETO|VENCIMENTO|ASSINATURA|DECLARO|EVITE|PAGAVEL|INSCRICAO|RESERVADO|IMPRESSO|BASE DE|DADOS DO PRODUTO|DESCRICAO DOS|PESO BRUTO/i;
     const rawLines = text.split("\n").map(l => l.trim()).filter(l => l.length > 1 && !LIXO.test(l));
@@ -7517,17 +7721,29 @@ function ImportarPage(_ref21) {
       const tc = await page.getTextContent();
       const byY = {};
       tc.items.forEach(item => {
-        const y = Math.round(item.transform[5]);
+        const y = Math.round(item.transform[5] / 2) * 2; // agrupa linhas próximas (tolerância de 2px)
+        const x = item.transform[4];
         if (!byY[y]) byY[y] = [];
-        byY[y].push(item.str);
+        byY[y].push({
+          x,
+          str: item.str
+        });
       });
       const sortedY = Object.keys(byY).map(Number).sort((a, b) => b - a);
-      pageTexts.push(...sortedY.map(y => byY[y].join(" ").trim()).filter(Boolean));
+      pageTexts.push(...sortedY.map(y => byY[y].sort((a, b) => a.x - b.x).map(o => o.str).join(" ").trim()).filter(Boolean));
     }
     const fullText = pageTexts.join("\n");
     // Detecta orçamento pelo conteúdo (tem COD NCM: ou COD.BARRAS:)
     if (fullText.includes("COD NCM:") || fullText.includes("COD.BARRAS:") || fullText.includes("ORCAMENTO Nº") || fullText.includes("ORÇAMENTO")) {
       return parseOrcamentoPDF(fullText);
+    }
+    // Detecta "Pedido de Venda" (Nova Casa / ION Sistemas) — tem coluna COD. BARRAS
+    if (fullText.includes("PEDIDO DE VENDA") || fullText.includes("ION Sistemas") || fullText.includes("COD. BARRAS")) {
+      return parsePedidoVendaPDF(fullText);
+    }
+    // Detecta "Relatório Negociação Pedido" (formato CODIGO DESCRIÇÃO QTD UNT LIQ C.P NCM)
+    if (fullText.includes("Relatório Negociação Pedido") || fullText.includes("VALOR TOTAL DA NEGOCIAÇÃO") || fullText.includes("QUANTIDADE DE ITENS:")) {
+      return parseNegociacaoPDF(fullText);
     }
     return parseTXT(fullText);
   };
@@ -7541,6 +7757,8 @@ function ImportarPage(_ref21) {
     setStatusMsg("Lendo arquivo...");
     try {
       let produtos = [];
+      const isXml = name.endsWith(".xml");
+      setOrigemFormato(isXml ? "xml" : "orcamento");
       if (name.endsWith(".xml")) {
         const text = await file.text();
         produtos = parseXML(text);
@@ -7557,7 +7775,7 @@ function ImportarPage(_ref21) {
         produtos = parseTXT(text);
         notify(produtos.length + " item(ns) do TXT ✓");
       } else throw new Error("Use XML, CSV, PDF ou TXT.");
-      setParsed(produtos);
+      setParsed(enrichComMatches(produtos, products));
       setStep("review");
     } catch (err) {
       notify(err.message, "error");
@@ -7574,23 +7792,29 @@ function ImportarPage(_ref21) {
     }
     let novos = 0,
       atualizados = 0,
-      ignorados = 0;
+      pendentes = 0;
     const np = [...products];
+    const idsProcessados = new Set();
+    const novosIds = []; // ids de produtos recém-criados nesta importação
+    const estadoAnterior = []; // { id, ...campos antes de mudar } dos produtos atualizados
     sel.forEach(p => {
-      // Busca por código de barras primeiro (mais preciso), depois por nome
+      const decision = p.matchDecision || "novo";
+      if (decision === "pending") {
+        pendentes++;
+        return; // não importa ainda — precisa confirmar se é o mesmo produto ou não
+      }
       let idx = -1;
-      if (p.barcode) idx = np.findIndex(x => x.barcode && x.barcode.trim() === p.barcode.trim());
-      if (idx < 0) idx = np.findIndex(x => x.name.toLowerCase().trim() === p.nome.toLowerCase().trim());
-      // Busca parcial: nome do produto contém o nome da NF ou vice-versa
-      if (idx < 0) {
-        const nNorm = p.nome.toLowerCase().replace(/\s+/g, " ").trim();
-        idx = np.findIndex(x => {
-          const xNorm = x.name.toLowerCase().replace(/\s+/g, " ").trim();
-          return xNorm.includes(nNorm) || nNorm.includes(xNorm);
-        });
+      if ((decision === "auto" || decision === "confirmed_same") && p.matchId) {
+        idx = np.findIndex(x => x.id === p.matchId);
       }
       if (idx >= 0) {
-        // Produto existe — atualiza estoque e preço custo
+        // Produto existe — guarda o estado antes de mudar, pra dar pra desfazer depois
+        estadoAnterior.push({
+          id: np[idx].id,
+          costPrice: np[idx].costPrice,
+          stock: np[idx].stock,
+          barcode: np[idx].barcode
+        });
         np[idx] = {
           ...np[idx],
           costPrice: p.precoUnitario,
@@ -7601,8 +7825,9 @@ function ImportarPage(_ref21) {
         atualizados++;
       } else {
         // Produto novo
+        const novoId = uid();
         np.unshift({
-          id: uid(),
+          id: novoId,
           name: p.nome,
           category: p.categoria,
           price: 0,
@@ -7619,13 +7844,77 @@ function ImportarPage(_ref21) {
           description: "",
           createdAt: Date.now()
         });
+        novosIds.push(novoId);
         novos++;
       }
+      idsProcessados.add(p.id);
     });
     persistP(np);
-    notify(novos + " novo(s), " + atualizados + " atualizado(s) ✓");
+    if (novos > 0 || atualizados > 0) {
+      setLastImport({
+        novosIds,
+        estadoAnterior,
+        resumo: novos + " novo(s), " + atualizados + " atualizado(s)",
+        quando: Date.now()
+      });
+    }
+    const restantes = parsed.filter(p => !idsProcessados.has(p.id));
+    let msg = novos + " novo(s), " + atualizados + " atualizado(s)";
+    if (pendentes > 0) msg += " · ⚠️ " + pendentes + " aguardando confirmação (veja abaixo)";
+    notify(msg + (pendentes > 0 ? "" : " ✓"), pendentes > 0 ? "warn" : "info");
+    if (restantes.length > 0) {
+      setParsed(restantes.map(p => ({
+        ...p,
+        selected: p.matchDecision !== "pending" ? false : p.selected
+      })));
+    } else {
+      setStep("done");
+      setParsed([]);
+    }
+  };
+  // Envia itens de um orçamento (PDF/CSV/TXT) pra Lista de Compras, sem
+  // cadastrar produto nenhum — só quando a mercadoria realmente chegar
+  // (fase "Receber" na Lista de Compras) é que vira produto de verdade.
+  const enviarParaListaCompras = () => {
+    const sel = parsed.filter(p => p.selected);
+    if (sel.length === 0) {
+      notify("Selecione ao menos um.", "warn");
+      return;
+    }
+    const listaAtual = load("pdv_lista_compras", []);
+    const novosItens = sel.map(p => ({
+      id: uid(),
+      name: p.nome,
+      qty: String(p.estoque || p.quantidade || 1),
+      fase: "pendente",
+      price: 0,
+      costPrice: p.precoUnitario || 0,
+      barcode: p.barcode || "",
+      createdAt: Date.now()
+    }));
+    const listaNova = [...novosItens, ...listaAtual];
+    save("pdv_lista_compras", listaNova);
+    if (novosItens.length > 20) syncSave("lista_compras", novosItens);else novosItens.forEach(i => syncSaveOne("lista_compras", i));
+    notify(novosItens.length + " item(ns) enviado(s) para a Lista de Compras ✓");
     setStep("done");
     setParsed([]);
+  };
+  const desfazerImportacao = () => {
+    if (!lastImport) return;
+    const np = products.filter(x => !lastImport.novosIds.includes(x.id)) // remove os que foram criados
+    .map(x => {
+      // devolve o estado anterior dos que foram atualizados
+      const anterior = lastImport.estadoAnterior.find(a => a.id === x.id);
+      return anterior ? {
+        ...x,
+        costPrice: anterior.costPrice,
+        stock: anterior.stock,
+        barcode: anterior.barcode
+      } : x;
+    });
+    persistP(np);
+    notify("Importação desfeita — " + lastImport.resumo + " revertido(s) ✓");
+    setLastImport(null);
   };
   const saveEdit = idx => {
     setParsed(parsed.map((x, i) => i === idx ? {
@@ -7652,20 +7941,66 @@ function ImportarPage(_ref21) {
       color: "#4ade80",
       marginBottom: 8
     }
-  }, "Importa\xE7\xE3o conclu\xEDda!"), /*#__PURE__*/React.createElement("div", {
+  }, origemFormato === "xml" ? "Importa\xE7\xE3o conclu\xEDda!" : "Enviado para a Lista de Compras!"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 13,
       color: "var(--text-secondary)",
       marginBottom: 28
     }
-  }, "Produtos adicionados ao estoque."), /*#__PURE__*/React.createElement("button", {
+  }, origemFormato === "xml" ? "Produtos adicionados ao estoque." : "Nada foi cadastrado no estoque ainda \u2014 v\xE1 em Lista de Compras e use a op\xE7\xE3o \u201CReceber\u201D quando a mercadoria chegar de verdade."), origemFormato === "xml" && lastImport && /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...S.btn("ghost"),
+      color: "#f87171",
+      borderColor: "#f8717140",
+      marginBottom: 12,
+      justifyContent: "center",
+      width: "100%",
+      maxWidth: 320,
+      margin: "0 auto 12px"
+    },
+    onClick: () => {
+      if (window.confirm("Desfazer a última importação (" + lastImport.resumo + ")? Isso remove os produtos novos e devolve preço/estoque dos atualizados.")) {
+        desfazerImportacao();
+      }
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "trash",
+    size: 14
+  }), " Desfazer esta importa\xE7\xE3o"), /*#__PURE__*/React.createElement("button", {
     style: S.btn("primary"),
     onClick: () => setStep("input")
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "import",
     size: 14
   }), " Nova Importa\xE7\xE3o"));
-  if (step === "review") return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  if (step === "review") return /*#__PURE__*/React.createElement("div", null, lastImport && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      background: "#f8717115",
+      border: "1px solid #f8717140",
+      borderRadius: 10,
+      padding: "8px 12px",
+      marginBottom: 12,
+      fontSize: 12
+    }
+  }, /*#__PURE__*/React.createElement("span", null, "\u26A0\uFE0F \xDAltima importa\xE7\xE3o: ", lastImport.resumo), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      if (window.confirm("Desfazer a última importação (" + lastImport.resumo + ")?")) {
+        desfazerImportacao();
+      }
+    },
+    style: {
+      background: "none",
+      border: "none",
+      color: "#f87171",
+      fontWeight: 700,
+      cursor: "pointer",
+      fontFamily: "inherit",
+      fontSize: 12
+    }
+  }, "Desfazer")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       justifyContent: "space-between",
@@ -7677,7 +8012,7 @@ function ImportarPage(_ref21) {
       fontSize: 15,
       fontWeight: 700
     }
-  }, "Revisar Produtos"), /*#__PURE__*/React.createElement("div", {
+  }, origemFormato === "xml" ? "Revisar Produtos" : "Revisar Itens do Or\xE7amento"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       color: "var(--text-secondary)",
@@ -7700,11 +8035,11 @@ function ImportarPage(_ref21) {
       ...S.btn("primary"),
       padding: "9px 14px"
     },
-    onClick: importarSelecionados
+    onClick: origemFormato === "xml" ? importarSelecionados : enviarParaListaCompras
   }, /*#__PURE__*/React.createElement(Icon, {
-    name: "import",
+    name: origemFormato === "xml" ? "import" : "list",
     size: 14
-  }), " Importar"))), /*#__PURE__*/React.createElement("div", {
+  }), origemFormato === "xml" ? " Importar" : " Enviar p/ Lista de Compras"))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -7986,7 +8321,77 @@ function ImportarPage(_ref21) {
       cursor: "pointer",
       fontFamily: "inherit"
     }
-  }, "\uD83D\uDCF7 Sem c\xF3digo \u2014 bipar")), prod.observacao ? /*#__PURE__*/React.createElement("div", {
+  }, "\uD83D\uDCF7 Sem c\xF3digo \u2014 bipar")), prod.matchDecision === "auto" && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 6,
+      fontSize: 11,
+      color: "#4ade80",
+      display: "flex",
+      alignItems: "center",
+      gap: 4
+    }
+  }, "\uD83D\uDFE2 Vincula automaticamente a \u201C", prod.matchName, "\u201D (", prod.matchScore, "%)"), prod.matchDecision === "pending" && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 6,
+      padding: 8,
+      background: "#f59e0b15",
+      border: "1px solid #f59e0b40",
+      borderRadius: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#f59e0b",
+      marginBottom: 6
+    }
+  }, "\uD83D\uDFE1 Pode ser \u201C", prod.matchName, "\u201D (", prod.matchScore, "% parecido) \u2014 confirme:"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setParsed(pp => pp.map((x, i) => i === idx ? {
+      ...x,
+      matchDecision: "confirmed_same"
+    } : x)),
+    style: {
+      ...S.btn("ghost"),
+      flex: 1,
+      padding: "6px",
+      fontSize: 11,
+      color: "#4ade80",
+      borderColor: "#4ade8040"
+    }
+  }, "\u2705 \xC9 o mesmo"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setParsed(pp => pp.map((x, i) => i === idx ? {
+      ...x,
+      matchDecision: "confirmed_new"
+    } : x)),
+    style: {
+      ...S.btn("ghost"),
+      flex: 1,
+      padding: "6px",
+      fontSize: 11
+    }
+  }, "\uD83C\uDD95 \xC9 outro"))), prod.matchDecision === "confirmed_same" && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 6,
+      fontSize: 11,
+      color: "#4ade80"
+    }
+  }, "\u2705 Confirmado: vai atualizar \u201C", prod.matchName, "\u201D"), prod.matchDecision === "confirmed_new" && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 6,
+      fontSize: 11,
+      color: "var(--text-secondary)"
+    }
+  }, "\uD83C\uDD95 Vai criar como produto novo"), prod.matchDecision === "novo" && !prod.matchName && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 6,
+      fontSize: 11,
+      color: "var(--text-secondary)"
+    }
+  }, "\uD83D\uDD34 Nenhum parecido encontrado \u2014 ser\xE1 criado como novo"), prod.observacao ? /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       color: "var(--text-secondary)",
@@ -8029,11 +8434,11 @@ function ImportarPage(_ref21) {
       justifyContent: "center",
       padding: "12px"
     },
-    onClick: importarSelecionados
+    onClick: origemFormato === "xml" ? importarSelecionados : enviarParaListaCompras
   }, /*#__PURE__*/React.createElement(Icon, {
-    name: "import",
+    name: origemFormato === "xml" ? "import" : "list",
     size: 15
-  }), " Importar ", parsed.filter(p => p.selected).length)), scanningIdx !== null && /*#__PURE__*/React.createElement(ScannerBase, {
+  }), origemFormato === "xml" ? " Importar " : " Enviar ", parsed.filter(p => p.selected).length)), scanningIdx !== null && /*#__PURE__*/React.createElement(ScannerBase, {
     S: S,
     title: "Bipar C\xF3digo do Produto",
     subtitle: (parsed[scanningIdx] === null || parsed[scanningIdx] === void 0 ? void 0 : parsed[scanningIdx].nome) || "",
@@ -8207,8 +8612,10 @@ function ImportarPage(_ref21) {
         e.preventDefault();
         try {
           var _txt$split$;
-          const prods = txt.includes("<det") ? parseXML(txt) : txt.includes(",") && ((_txt$split$ = txt.split("\n")[0]) === null || _txt$split$ === void 0 ? void 0 : _txt$split$.split(",").length) > 2 ? parseCSV(txt) : parseTXT(txt);
-          setParsed(prods);
+          const isXml = txt.includes("<det");
+          setOrigemFormato(isXml ? "xml" : "orcamento");
+          const prods = isXml ? parseXML(txt) : txt.includes(",") && ((_txt$split$ = txt.split("\n")[0]) === null || _txt$split$ === void 0 ? void 0 : _txt$split$.split(",").length) > 2 ? parseCSV(txt) : parseTXT(txt);
+          setParsed(enrichComMatches(prods, products));
           setStep("review");
           notify(prods.length + " produto(s) ✓");
         } catch (err) {
@@ -8230,6 +8637,10 @@ function EntregasPage(_ref24) {
     persistSProp = _ref24.persistS,
     products = _ref24.products,
     onReload = _ref24.onReload;
+  const _useStatePM = useState(null),
+    _useStatePM2 = _slicedToArray(_useStatePM, 2),
+    printMenuId = _useStatePM2[0],
+    setPrintMenuId = _useStatePM2[1];
   const _useState141 = useState(() => pedidosProp || load("pdv_entregas", [])),
     _useState142 = _slicedToArray(_useState141, 2),
     pedidos = _useState142[0],
@@ -8455,14 +8866,23 @@ function EntregasPage(_ref24) {
     } : p));
     notify("Lançado no histórico ✓ — edite a forma de pagamento se precisar.");
   };
-  const imprimirBrowser = ped => {
+  const imprimirBrowser = (ped, modo) => {
+    modo = modo || "a4";
     const st = ST[ped.status];
-    const itemRows = (ped.itens || []).map(i => "<tr><td>" + i.name + "</td><td style='text-align:center'>" + i.qty + "x</td><td style='text-align:right;font-weight:600'>" + fmt(i.price * i.qty) + "</td></tr>").join("");
-    const css = "body{font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;color:#111;}table{width:100%;border-collapse:collapse;font-size:12px;}th{background:#f3f4f6;padding:6px;text-align:left;font-size:10px;text-transform:uppercase;}td{padding:6px;border-bottom:1px solid #f3f4f6;}.total{font-size:16px;font-weight:800;text-align:right;margin-top:10px;color:#2D3A8C;}@media print{body{max-width:100%;padding:8px}}";
     const pgStatus = ped.pagamento || "";
     const pgLabel = pgStatus === "pago" ? "✅ PAGO" : pgStatus === "troco" ? "💵 LEVAR TROCO" : pgStatus === "maquina" ? "📲 LEVAR MÁQUINA" : pgStatus === "troco_maquina" ? "💵📲 LEVAR TROCO + MÁQUINA" : "";
     const pgColor = pgStatus === "pago" ? "#27ae60" : "#e74c3c";
-    const html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + ped.numero + "</title><style>" + css + "</style></head><body>" + "<div style='background:#2D3A8C;color:#fff;padding:14px;border-radius:8px;margin-bottom:16px;display:flex;align-items:center;gap:12px'>" + "<img src='" + LOGO_SRC + "' alt='logo' style='height:40px;flex-shrink:0'/>" + "<div style='text-align:left'>" + "<div style='font-size:15px;font-weight:800;letter-spacing:1px'>PEDIDO DE ENTREGA</div>" + "<div style='font-size:11px;margin-top:3px;opacity:.85'>" + ped.numero + " · " + ped.criadoData + " " + ped.criadoHora + "</div>" + "</div>" + "</div>" + "<div style='background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-bottom:12px;font-size:12px'>" + "<div style='display:flex;justify-content:space-between;margin-bottom:4px'>" + "<span><b>Status:</b> " + st.emoji + " " + st.label + "</span>" + "<span><b>Total:</b> <span style='color:#2D3A8C;font-weight:800'>" + fmt(ped.total) + "</span></span></div>" + "<b>Cliente:</b> " + ped.cliente + (ped.telefone ? " · 📞" + ped.telefone : "") + "<br>" + (ped.endereco ? "<b>Endereço:</b> 📍" + ped.endereco + "<br>" : "") + "</div>" + "<table><thead><tr><th>Produto</th><th style='text-align:center'>Qtd</th><th style='text-align:right'>Valor</th></tr></thead><tbody>" + itemRows + "</tbody></table>" + "<div class='total'>TOTAL: " + fmt(ped.total) + "</div>" + (pgLabel ? "<div style='margin-top:10px;padding:10px;border-radius:6px;border:2px solid " + pgColor + ";font-size:13px;font-weight:800;text-align:center;color:" + pgColor + "'>" + pgLabel + "</div>" : "") + (ped.obs ? "<div style='background:#fffbeb;border:1px solid #fef08a;padding:8px;border-radius:6px;font-size:12px;margin-top:8px'><b>Obs:</b> " + ped.obs + "</div>" : "") + "<div style='border-top:2px solid #2D3A8C;margin-top:20px;padding-top:14px;font-size:11px;color:#888;text-align:center'>" + "Assinatura do recebedor: _______________________________<br><br>Data: _____ / _____ / _______" + "</div>" + "</body></html>";
+    let html;
+    if (modo === "80mm" || modo === "58mm") {
+      const larguraMm = modo === "80mm" ? 80 : 58;
+      const itemRowsTerm = (ped.itens || []).map(i => "<div class='item'><span>" + i.qty + "x " + i.name + "</span><span>" + fmt(i.price * i.qty) + "</span></div>").join("");
+      const cssTerm = "@page{size:" + larguraMm + "mm auto;margin:0}" + "*{box-sizing:border-box}" + "body{font-family:'Courier New',monospace;width:" + (larguraMm - 4) + "mm;margin:0 auto;padding:2mm;color:#000;font-size:" + (modo === "58mm" ? "10px" : "11px") + "}" + "hr{border:none;border-top:1px dashed #000;margin:6px 0}" + ".center{text-align:center}" + ".b{font-weight:700}" + ".logo{max-width:60%;max-height:16mm;margin:0 auto 4px;display:block}" + ".titulo{font-size:" + (modo === "58mm" ? "12px" : "14px") + ";font-weight:800;letter-spacing:1px}" + ".item{display:flex;justify-content:space-between;gap:6px;margin:2px 0}" + ".total{display:flex;justify-content:space-between;font-size:" + (modo === "58mm" ? "13px" : "15px") + ";font-weight:800;margin-top:6px}" + ".box{border:1px solid #000;padding:4px;margin:6px 0;text-align:center;font-weight:800}" + "@media print{body{width:" + (larguraMm - 4) + "mm}}";
+      html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + ped.numero + "</title><style>" + cssTerm + "</style></head><body>" + "<div class='center'>" + "<img class='logo' src='" + LOGO_SRC + "'/>" + "<div class='titulo'>PEDIDO DE ENTREGA</div>" + "<div>" + ped.numero + " · " + ped.criadoData + " " + ped.criadoHora + "</div>" + "</div>" + "<hr>" + "<div><span class='b'>Status:</span> " + st.emoji + " " + st.label + "</div>" + "<div><span class='b'>Cliente:</span> " + ped.cliente + "</div>" + (ped.telefone ? "<div><span class='b'>Tel:</span> " + ped.telefone + "</div>" : "") + (ped.endereco ? "<div><span class='b'>End:</span> " + ped.endereco + "</div>" : "") + "<hr>" + itemRowsTerm + "<hr>" + "<div class='total'><span>TOTAL</span><span>" + fmt(ped.total) + "</span></div>" + (pgLabel ? "<div class='box'>" + pgLabel + "</div>" : "") + (ped.obs ? "<hr><div><span class='b'>Obs:</span> " + ped.obs + "</div>" : "") + "<hr>" + "<div class='center' style='margin-top:14px'>Assinatura: ______________________</div>" + "<div class='center' style='margin-top:16px'></div>" + "</body></html>";
+    } else {
+      const itemRows = (ped.itens || []).map(i => "<tr><td>" + i.name + "</td><td style='text-align:center'>" + i.qty + "x</td><td style='text-align:right;font-weight:600'>" + fmt(i.price * i.qty) + "</td></tr>").join("");
+      const css = "*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}body{font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;color:#111;}table{width:100%;border-collapse:collapse;font-size:12px;}th{background:#f3f4f6;padding:6px;text-align:left;font-size:10px;text-transform:uppercase;}td{padding:6px;border-bottom:1px solid #f3f4f6;}.total{font-size:16px;font-weight:800;text-align:right;margin-top:10px;color:#2D3A8C;}@media print{body{max-width:100%;padding:8px}}";
+      html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + ped.numero + "</title><style>" + css + "</style></head><body>" + "<div style='background:#2D3A8C;color:#fff;padding:14px;border-radius:8px;margin-bottom:16px;display:flex;align-items:center;gap:12px'>" + "<img src='" + LOGO_SRC + "' alt='logo' style='height:40px;flex-shrink:0'/>" + "<div style='text-align:left'>" + "<div style='font-size:15px;font-weight:800;letter-spacing:1px'>PEDIDO DE ENTREGA</div>" + "<div style='font-size:11px;margin-top:3px;opacity:.85'>" + ped.numero + " · " + ped.criadoData + " " + ped.criadoHora + "</div>" + "</div>" + "</div>" + "<div style='background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-bottom:12px;font-size:12px'>" + "<div style='display:flex;justify-content:space-between;margin-bottom:4px'>" + "<span><b>Status:</b> " + st.emoji + " " + st.label + "</span>" + "<span><b>Total:</b> <span style='color:#2D3A8C;font-weight:800'>" + fmt(ped.total) + "</span></span></div>" + "<b>Cliente:</b> " + ped.cliente + (ped.telefone ? " · 📞" + ped.telefone : "") + "<br>" + (ped.endereco ? "<b>Endereço:</b> 📍" + ped.endereco + "<br>" : "") + "</div>" + "<table><thead><tr><th>Produto</th><th style='text-align:center'>Qtd</th><th style='text-align:right'>Valor</th></tr></thead><tbody>" + itemRows + "</tbody></table>" + "<div class='total'>TOTAL: " + fmt(ped.total) + "</div>" + (pgLabel ? "<div style='margin-top:10px;padding:10px;border-radius:6px;border:2px solid " + pgColor + ";font-size:13px;font-weight:800;text-align:center;color:" + pgColor + "'>" + pgLabel + "</div>" : "") + (ped.obs ? "<div style='background:#fffbeb;border:1px solid #fef08a;padding:8px;border-radius:6px;font-size:12px;margin-top:8px'><b>Obs:</b> " + ped.obs + "</div>" : "") + "<div style='border-top:2px solid #2D3A8C;margin-top:20px;padding-top:14px;font-size:11px;color:#888;text-align:center'>" + "Assinatura do recebedor: _______________________________<br><br>Data: _____ / _____ / _______" + "</div>" + "</body></html>";
+    }
     // Usa iframe para evitar bloqueio de popup
     const iframe = document.createElement("iframe");
     iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
@@ -8873,11 +9293,16 @@ function EntregasPage(_ref24) {
         color: "#4ade80",
         borderColor: "#4ade8040"
       }
-    }, "\uD83D\uDCDD Lan\xE7ar no Hist\xF3rico"), /*#__PURE__*/React.createElement("button", {
-      onClick: () => imprimirBrowser(ped),
+    }, "\uD83D\uDCDD Lan\xE7ar no Hist\xF3rico"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "relative",
+        flex: 1
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: () => setPrintMenuId(printMenuId === ped.id ? null : ped.id),
       style: {
         ...S.btn("ghost"),
-        flex: 1,
+        width: "100%",
         justifyContent: "center",
         padding: "7px",
         fontSize: 12
@@ -8885,7 +9310,44 @@ function EntregasPage(_ref24) {
     }, /*#__PURE__*/React.createElement(Icon, {
       name: "printer",
       size: 13
-    }), " Imprimir Pedido"), /*#__PURE__*/React.createElement("button", {
+    }), " Imprimir Pedido"), printMenuId === ped.id && /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "absolute",
+        bottom: "100%",
+        left: 0,
+        right: 0,
+        marginBottom: 4,
+        background: "var(--bg-card)",
+        border: "1px solid var(--bg-elevated)",
+        borderRadius: 10,
+        boxShadow: "0 4px 16px rgba(0,0,0,.3)",
+        overflow: "hidden",
+        zIndex: 20
+      }
+    }, [["80mm", "\uD83E\uDDFE T\xE9rmica 80mm"], ["58mm", "\uD83E\uDDFE T\xE9rmica 58mm"], ["a4", "\uD83D\uDCC4 Folha A4"]].map(_ref2c => {
+      let val = _ref2c[0],
+        label = _ref2c[1];
+      return /*#__PURE__*/React.createElement("button", {
+        key: val,
+        onClick: () => {
+          imprimirBrowser(ped, val);
+          setPrintMenuId(null);
+        },
+        style: {
+          display: "block",
+          width: "100%",
+          textAlign: "left",
+          padding: "9px 12px",
+          background: "none",
+          border: "none",
+          borderBottom: "1px solid var(--bg-elevated)",
+          color: "var(--text-primary)",
+          fontSize: 12,
+          fontFamily: "inherit",
+          cursor: "pointer"
+        }
+      }, label);
+    }))), /*#__PURE__*/React.createElement("button", {
       onClick: () => excluirPedido(ped.id),
       style: {
         ...S.btn("danger"),
@@ -10513,14 +10975,9 @@ function RelatoriosPage(_refRel) {
       titulo = "Relatório de Fornecedores";
       corpo = "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Fornecedor</th><th " + th + ">CNPJ</th><th " + th + ">Telefone</th><th " + th + ">Cidade</th></tr>" + relFornecedores.map(f => "<tr><td " + td + ">" + f.nome + "</td><td " + td + ">" + f.cnpj + "</td><td " + td + ">" + f.telefone + "</td><td " + td + ">" + f.cidade + "</td></tr>").join("") + "</table>";
     }
-    const win = window.open("", "_blank");
-    if (!win) {
-      notify("Permita pop-ups para gerar o PDF.", "warn");
-      return;
-    }
     const contexto = tipo === "entregas" || tipo === "fornecedores" || tipo === "estoque" ? "Situação atual" : periodoLabel;
-    win.document.write("<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + titulo + "</title></head>" + "<body style='font-family:Arial,sans-serif;padding:30px;color:#222'>" + "<h2 style='color:#E8682A;margin:0 0 4px'>" + titulo + "</h2>" + "<div style='color:#666;font-size:13px;margin-bottom:18px'>VENDAS PECUARÃO · " + contexto + " · " + new Date().toLocaleString("pt-BR") + "</div>" + corpo + "<script>setTimeout(function(){window.print()},400)<\/script></body></html>");
-    win.document.close();
+    const htmlRel = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + titulo + "</title><style>*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}</style></head>" + "<body style='font-family:Arial,sans-serif;padding:30px;color:#222'>" + "<h2 style='color:#E8682A;margin:0 0 4px'>" + titulo + "</h2>" + "<div style='color:#666;font-size:13px;margin-bottom:18px'>VENDAS PECUARÃO · " + contexto + " · " + new Date().toLocaleString("pt-BR") + "</div>" + corpo + "</body></html>";
+    printHTMLDoc(htmlRel);
   };
 
   const abas = [["vendas", "💰 Vendas"], ["lucro", "📈 Lucro"], ["comissao", "🤝 Comissão"], ["produtos", "🏆 Produtos"], ["estoque", "📦 Estoque"], ["clientes", "👥 Clientes"], ["entregas", "🚚 Entregas"], ["fornecedores", "🏭 Fornecedores"], ["pagamento", "💳 Pagamentos"]];
@@ -11516,22 +11973,13 @@ function PDVApp() {
     const itemRows = s.items.map(i => "<tr><td><div>" + i.name + "</div><div style='font-size:10px;color:#888'>" + i.qty + " x " + fmt(i.price) + "</div></td><td style='text-align:center'>" + i.qty + "</td><td style='text-align:right;font-weight:600'>" + fmt(i.price * i.qty) + "</td></tr>").join("");
     const endCli = cliente ? [cliente.rua && cliente.rua + (cliente.numero ? ", " + cliente.numero : ""), cliente.bairro, cliente.cidade && cliente.cidade + (cliente.uf ? " - " + cliente.uf : "")].filter(Boolean).join(", ") : "";
     const promissoria = isPrazo ? gerarNotaPromissoria((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer, (cliente === null || cliente === void 0 ? void 0 : cliente.cpf) || "", endCli, (cliente === null || cliente === void 0 ? void 0 : cliente.phone) || "", s.total, dataStr, s.id.slice(-6).toUpperCase()) : "";
-    const css = "body{font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;color:#111;}table{width:100%;border-collapse:collapse;font-size:13px;}th{background:#f3f4f6;padding:7px 8px;text-align:left;font-size:11px;text-transform:uppercase;}td{padding:7px 8px;border-bottom:1px solid #f3f4f6;}.total{font-size:17px;font-weight:700;text-align:right;margin-top:8px;color:#e74c3c;}@media print{body{max-width:100%;padding:10px}}";
+    const css = "*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}body{font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;color:#111;}table{width:100%;border-collapse:collapse;font-size:13px;}th{background:#f3f4f6;padding:7px 8px;text-align:left;font-size:11px;text-transform:uppercase;}td{padding:7px 8px;border-bottom:1px solid #f3f4f6;}.total{font-size:17px;font-weight:700;text-align:right;margin-top:8px;color:#e74c3c;}@media print{body{max-width:100%;padding:10px}}";
     return "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Recibo</title><style>" + css + "</style></head><body>" + "<div style='background:#2D3A8C;color:#fff;padding:14px;border-radius:8px;margin-bottom:16px;display:flex;align-items:center;gap:12px'>" + "<img src='" + LOGO_SRC + "' alt='logo' style='height:40px;flex-shrink:0'/>" + "<div style='text-align:left'>" + "<div style='font-size:16px;font-weight:800;letter-spacing:1px'>RECIBO DE VENDA</div>" + "<div style='font-size:11px;margin-top:4px'>" + s.date + " " + s.time + " · Nº " + s.id.slice(-8).toUpperCase() + "</div>" + "</div></div>" + "<div style='background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px;margin-bottom:14px'>" + "<div style='font-size:11px;color:#888;text-transform:uppercase;margin-bottom:4px'>Cliente</div>" + "<div style='font-weight:700;font-size:14px'>" + ((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer) + "</div>" + (cliente !== null && cliente !== void 0 && cliente.cpf ? "<div style='font-size:12px;color:#666'>CPF/CNPJ: " + cliente.cpf + "</div>" : "") + (cliente !== null && cliente !== void 0 && cliente.phone ? "<div style='font-size:12px;color:#666'>Tel: " + cliente.phone + "</div>" : "") + (endCli ? "<div style='font-size:12px;color:#666'>" + endCli + "</div>" : "") + "</div>" + "<table><thead><tr><th>Produto</th><th>Qtd</th><th>Total</th></tr></thead><tbody>" + itemRows + "</tbody></table>" + "<div class='total'>TOTAL: " + fmt(s.total) + "</div>" + "<div style='display:flex;justify-content:space-between;margin-top:8px;font-size:12px;color:#666'>" + "<span>Pagamento: <b>" + s.payment + "</b></span>" + (isPrazo ? "<span style='color:#c0392b;font-weight:700'>⚠️ A PRAZO</span>" : "") + "</div>" + "<div style='margin-top:20px;border-top:2px solid #2D3A8C;padding-top:14px;text-align:center'>" + "<div style='font-size:12px;color:#E8682A;font-style:italic'>Obrigado pela preferência! 🐾</div>" + "</div>" + promissoria + "</body></html>";
   };
   const imprimirRecibo = s => {
     const cliente = customers.find(c => c.name === s.customer);
     const html = htmlRecibo(s, cliente);
-    const w = window.open("", "_blank", "width=500,height=750");
-    if (w) {
-      w.document.write(html);
-      w.document.close();
-      setTimeout(() => {
-        try {
-          w.print();
-        } catch (_) {}
-      }, 600);
-    } else notify("Permita pop-ups para imprimir.", "warn");
+    printHTMLDoc(html);
   };
   const compartilharRecibo = s => {
     const cliente = customers.find(c => c.name === s.customer);
