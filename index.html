@@ -2861,7 +2861,9 @@ const ADMIN_PERMS = {
   lista: true,
   editarProdutos: true,
   excluirVendas: true,
-  fornecedores: true
+  fornecedores: true,
+  dashboard: true,
+  dashboardSoProprio: false
 };
 const DEFAULT_USERS = [{
   id: "admin",
@@ -3439,6 +3441,12 @@ function UsersPage(_ref11) {
   }, {
     k: "excluirVendas",
     l: "Excluir Vendas"
+  }, {
+    k: "dashboard",
+    l: "Ver Dashboard"
+  }, {
+    k: "dashboardSoProprio",
+    l: "Dashboard: só vendas próprias"
   }];
   const _useState37 = useState({
       name: "",
@@ -3455,7 +3463,9 @@ function UsersPage(_ref11) {
         entregas: true,
         lista: true,
         editarProdutos: false,
-        excluirVendas: false
+        excluirVendas: false,
+        dashboard: true,
+        dashboardSoProprio: true
       }
     }),
     _useState38 = _slicedToArray(_useState37, 2),
@@ -11353,6 +11363,10 @@ function PDVApp() {
     _useState174 = _slicedToArray(_useState173, 2),
     page = _useState174[0],
     setPage = _useState174[1];
+  const _useStateDP = useState("hoje"),
+    _useStateDP2 = _slicedToArray(_useStateDP, 2),
+    dashPeriodo = _useStateDP2[0],
+    setDashPeriodo = _useStateDP2[1];
   const _useState175 = useState(false),
     _useState176 = _slicedToArray(_useState175, 2),
     sideOpen = _useState176[0],
@@ -11482,6 +11496,10 @@ function PDVApp() {
     _useState202 = _slicedToArray(_useState201, 2),
     searchProd = _useState202[0],
     setSearchProd = _useState202[1];
+  const _useStateESP = useState(false),
+    _useStateESP2 = _slicedToArray(_useStateESP, 2),
+    estoqueScanOpen = _useStateESP2[0],
+    setEstoqueScanOpen = _useStateESP2[1];
   const _useState203 = useState(""),
     _useState204 = _slicedToArray(_useState203, 2),
     searchCust = _useState204[0],
@@ -12204,7 +12222,14 @@ function PDVApp() {
     });
   }, [filtProd, filterAvail, filterTipoVenda, priceMin, priceMax, sortBy, searchProd, products, vendidoPorNome]);
   const estoquePageList = useMemo(() => {
-    let list = products.filter(p => p.name.toLowerCase().includes(searchProd.toLowerCase()));
+    const termo = searchProd.trim().toLowerCase();
+    let list = products.filter(p => {
+      if (!termo) return true;
+      const nomeMatch = p.name.toLowerCase().includes(termo);
+      const barcodeMatch = p.barcode && p.barcode.includes(termo);
+      const barcodeExtraMatch = Array.isArray(p.barcodesExtra) && p.barcodesExtra.some(b => b.includes(termo));
+      return nomeMatch || barcodeMatch || barcodeExtraMatch;
+    });
     if (filterAvail === "instock") list = list.filter(p => p.stock > 0);
     if (filterAvail === "low") list = list.filter(p => p.stock > 0 && p.stock < 10);
     if (filterAvail === "out") list = list.filter(p => p.stock === 0);
@@ -12223,9 +12248,29 @@ function PDVApp() {
       return 0;
     });
   }, [products, searchProd, filterAvail, filterTipoVenda, priceMin, priceMax, sortBy, vendidoPorNome]);
-  const todaySales = sales.filter(s => s.date === todayStr());
+  const dashSales = useMemo(() => {
+    const soProprio = (currentUser === null || currentUser === void 0 ? void 0 : currentUser.role) !== "admin" && (currentUser === null || currentUser === void 0 ? void 0 : (currentUser.permissions || {}).dashboardSoProprio) === true;
+    if (!soProprio || !currentUser) return sales;
+    return sales.filter(s => (s.vendedor || "") === currentUser.name);
+  }, [sales, currentUser]);
+  const dashPeriodoOpts = [{
+    id: "hoje",
+    label: "Hoje"
+  }, {
+    id: "mes",
+    label: "Mês"
+  }, {
+    id: "total",
+    label: "Total"
+  }];
+  const dashPeriodoSalesFiltradas = useMemo(() => {
+    if (dashPeriodo === "hoje") return dashSales.filter(s => s.date === todayStr());
+    if (dashPeriodo === "mes") return dashSales.filter(s => (s.date || "").slice(0, 7) === todayStr().slice(0, 7));
+    return dashSales;
+  }, [dashSales, dashPeriodo]);
+  const todaySales = dashPeriodoSalesFiltradas;
   const todayRev = todaySales.reduce((s, v) => s + v.total, 0);
-  const totalRev = sales.reduce((s, v) => s + v.total, 0);
+  const totalRev = dashSales.reduce((s, v) => s + v.total, 0);
   // Vendas filtradas do Histórico
   const histFiltradas = useMemo(() => {
     const hoje = new Date();
@@ -12286,7 +12331,7 @@ function PDVApp() {
     id: "dashboard",
     label: "Dashboard",
     icon: "home",
-    perm: true
+    perm: (currentUser === null || currentUser === void 0 ? void 0 : currentUser.role) === "admin" || !(currentUser && currentUser.permissions && currentUser.permissions.dashboard === false)
   }, {
     id: "pdv",
     label: "PDV / Vendas",
@@ -12347,6 +12392,13 @@ function PDVApp() {
     setPage(id);
     if (!screen.desktop) setSideOpen(false);
   };
+  useEffect(() => {
+    if (!currentUser) return;
+    const atual = NAV.find(n => n.id === page);
+    if (atual && !atual.perm && NAV.length > 0) {
+      setPage(NAV[0].id);
+    }
+  }, [currentUser, page]);
   const endFmtC = c => {
     const parts = [];
     if (c.rua) parts.push(c.rua + (c.numero ? ", " + c.numero : ""));
@@ -12768,18 +12820,38 @@ function PDVApp() {
     }), " Novo Produto"))
   }) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
+      display: "flex",
+      gap: 6,
+      marginBottom: 12
+    }
+  }, dashPeriodoOpts.map(opt => /*#__PURE__*/React.createElement("button", {
+    key: opt.id,
+    onClick: () => setDashPeriodo(opt.id),
+    style: {
+      padding: "6px 14px",
+      borderRadius: 8,
+      border: "1px solid " + (dashPeriodo === opt.id ? "#E8682A" : "var(--bg-elevated)"),
+      background: dashPeriodo === opt.id ? "#E8682A20" : "transparent",
+      color: dashPeriodo === opt.id ? "#E8682A" : "var(--text-secondary)",
+      fontSize: 12,
+      fontWeight: 700,
+      cursor: "pointer",
+      fontFamily: "inherit"
+    }
+  }, opt.label))), /*#__PURE__*/React.createElement("div", {
+    style: {
       display: "grid",
       gridTemplateColumns: screen.desktop ? "repeat(4,1fr)" : "1fr 1fr",
       gap: screen.desktop ? 16 : 10,
       marginBottom: 14
     }
   }, [{
-    label: "Vendas Hoje",
+    label: "Vendas " + (dashPeriodo === "hoje" ? "Hoje" : dashPeriodo === "mes" ? "no Mês" : "(Total)"),
     value: todaySales.length,
     sub: "transações",
     accent: "#E8682A"
   }, {
-    label: "Receita Hoje",
+    label: "Receita " + (dashPeriodo === "hoje" ? "Hoje" : dashPeriodo === "mes" ? "no Mês" : "(Total)"),
     value: fmt(todayRev),
     sub: "faturamento",
     accent: "#4A5BC4"
@@ -13801,10 +13873,32 @@ function PDVApp() {
       ...S.input,
       paddingLeft: 34
     },
-    placeholder: "Buscar...",
+    placeholder: "Buscar por nome ou c\xF3digo de barras...",
     value: searchProd,
     onChange: e => setSearchProd(e.target.value)
   })), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setEstoqueScanOpen(true),
+    title: "Bipar c\xF3digo de barras",
+    style: {
+      ...S.btn("ghost"),
+      padding: "10px 12px",
+      flexShrink: 0,
+      borderRadius: 10
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "camera",
+    size: 17,
+    color: "#4A5BC4"
+  })), estoqueScanOpen && /*#__PURE__*/React.createElement(ScannerBase, {
+    S: S,
+    title: "Buscar Produto",
+    subtitle: "Aponte para o c\xF3digo de barras",
+    onCode: code => {
+      setSearchProd((code || "").trim());
+      setEstoqueScanOpen(false);
+    },
+    onClose: () => setEstoqueScanOpen(false)
+  }), /*#__PURE__*/React.createElement("button", {
     onClick: () => setShowFilters(f => !f),
     style: {
       ...S.btn(showFilters ? "primary" : "ghost"),
