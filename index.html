@@ -2862,8 +2862,7 @@ const ADMIN_PERMS = {
   editarProdutos: true,
   excluirVendas: true,
   fornecedores: true,
-  dashboard: true,
-  dashboardSoProprio: false
+  dashboardModo: "completo"
 };
 const DEFAULT_USERS = [{
   id: "admin",
@@ -3441,12 +3440,19 @@ function UsersPage(_ref11) {
   }, {
     k: "excluirVendas",
     l: "Excluir Vendas"
+  }];
+  const DASHBOARD_MODOS = [{
+    id: "completo",
+    l: "Completo — vê totais de todos",
+    icon: "👁"
   }, {
-    k: "dashboard",
-    l: "Ver Dashboard"
+    id: "proprio",
+    l: "Somente o que ele vendeu",
+    icon: "👤"
   }, {
-    k: "dashboardSoProprio",
-    l: "Dashboard: só vendas próprias"
+    id: "oculto",
+    l: "Oculto — não vê números",
+    icon: "🔒"
   }];
   const _useState37 = useState({
       name: "",
@@ -3464,8 +3470,7 @@ function UsersPage(_ref11) {
         lista: true,
         editarProdutos: false,
         excluirVendas: false,
-        dashboard: true,
-        dashboardSoProprio: true
+        dashboardModo: "proprio"
       }
     }),
     _useState38 = _slicedToArray(_useState37, 2),
@@ -4146,6 +4151,64 @@ function UsersPage(_ref11) {
       marginTop: 3
     }
   }, "Usada quando o produto n\xE3o tem comiss\xE3o pr\xF3pria definida.")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 20
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: "#E8682A",
+      textTransform: "uppercase",
+      letterSpacing: 1,
+      marginBottom: 8
+    }
+  }, "Dashboard Financeiro"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 6
+    }
+  }, DASHBOARD_MODOS.map(modo => {
+    var _form$permissions;
+    const ativo = (((_form$permissions = form.permissions) === null || _form$permissions === void 0 ? void 0 : _form$permissions.dashboardModo) || "completo") === modo.id;
+    return /*#__PURE__*/React.createElement("button", {
+      key: modo.id,
+      type: "button",
+      onClick: () => setForm(f => ({
+        ...f,
+        permissions: {
+          ...f.permissions,
+          dashboardModo: modo.id
+        }
+      })),
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "10px 12px",
+        borderRadius: 8,
+        border: "1px solid " + (ativo ? "#E8682A" : "var(--bg-elevated)"),
+        background: ativo ? "#E8682A15" : "transparent",
+        color: ativo ? "#E8682A" : "var(--text-primary)",
+        cursor: "pointer",
+        fontFamily: "inherit",
+        fontSize: 13,
+        fontWeight: ativo ? 700 : 500,
+        textAlign: "left"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 15
+      }
+    }, modo.icon), modo.l);
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "var(--text-secondary)",
+      marginTop: 6
+    }
+  }, "Controla o que este usu\xE1rio v\xEA no Dashboard: n\xFAmeros de todo mundo, s\xF3 as pr\xF3prias vendas, ou nada.")), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       fontWeight: 700,
@@ -8883,10 +8946,10 @@ function EntregasPage(_ref24) {
     const pgLabel = pgStatus === "pago" ? "✅ PAGO" : pgStatus === "troco" ? "💵 LEVAR TROCO" : pgStatus === "maquina" ? "📲 LEVAR MÁQUINA" : pgStatus === "troco_maquina" ? "💵📲 LEVAR TROCO + MÁQUINA" : "";
     const pgColor = pgStatus === "pago" ? "#27ae60" : "#e74c3c";
     let html;
-    if (modo === "80mm" || modo === "58mm") {
-      const larguraMm = modo === "80mm" ? 80 : 58;
+    if (modo === "80mm" || modo === "110mm") {
+      const larguraMm = modo === "80mm" ? 80 : 110;
       const itemRowsTerm = (ped.itens || []).map(i => "<div class='item'><span>" + i.qty + "x " + i.name + "</span><span>" + fmt(i.price * i.qty) + "</span></div>").join("");
-      const cssTerm = "@page{size:" + larguraMm + "mm auto;margin:0}" + "*{box-sizing:border-box}" + "body{font-family:'Courier New',monospace;width:" + (larguraMm - 4) + "mm;margin:0 auto;padding:2mm;color:#000;font-size:" + (modo === "58mm" ? "10px" : "11px") + "}" + "hr{border:none;border-top:1px dashed #000;margin:6px 0}" + ".center{text-align:center}" + ".b{font-weight:700}" + ".logo{max-width:60%;max-height:16mm;margin:0 auto 4px;display:block}" + ".titulo{font-size:" + (modo === "58mm" ? "12px" : "14px") + ";font-weight:800;letter-spacing:1px}" + ".item{display:flex;justify-content:space-between;gap:6px;margin:2px 0}" + ".total{display:flex;justify-content:space-between;font-size:" + (modo === "58mm" ? "13px" : "15px") + ";font-weight:800;margin-top:6px}" + ".box{border:1px solid #000;padding:4px;margin:6px 0;text-align:center;font-weight:800}" + "@media print{body{width:" + (larguraMm - 4) + "mm}}";
+      const cssTerm = "@page{size:" + larguraMm + "mm auto;margin:0}" + "*{box-sizing:border-box}" + "body{font-family:'Courier New',monospace;width:" + (larguraMm - 4) + "mm;margin:0 auto;padding:2mm;color:#000;font-size:" + (modo === "110mm" ? "13px" : "11px") + "}" + "hr{border:none;border-top:1px dashed #000;margin:6px 0}" + ".center{text-align:center}" + ".b{font-weight:700}" + ".logo{max-width:60%;max-height:16mm;margin:0 auto 4px;display:block}" + ".titulo{font-size:" + (modo === "110mm" ? "16px" : "14px") + ";font-weight:800;letter-spacing:1px}" + ".item{display:flex;justify-content:space-between;gap:6px;margin:2px 0}" + ".total{display:flex;justify-content:space-between;font-size:" + (modo === "110mm" ? "17px" : "15px") + ";font-weight:800;margin-top:6px}" + ".box{border:1px solid #000;padding:4px;margin:6px 0;text-align:center;font-weight:800}" + "@media print{body{width:" + (larguraMm - 4) + "mm}}";
       html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + ped.numero + "</title><style>" + cssTerm + "</style></head><body>" + "<div class='center'>" + "<img class='logo' src='" + LOGO_SRC + "'/>" + "<div class='titulo'>PEDIDO DE ENTREGA</div>" + "<div>" + ped.numero + " · " + ped.criadoData + " " + ped.criadoHora + "</div>" + "</div>" + "<hr>" + "<div><span class='b'>Status:</span> " + st.emoji + " " + st.label + "</div>" + "<div><span class='b'>Cliente:</span> " + ped.cliente + "</div>" + (ped.telefone ? "<div><span class='b'>Tel:</span> " + ped.telefone + "</div>" : "") + (ped.endereco ? "<div><span class='b'>End:</span> " + ped.endereco + "</div>" : "") + "<hr>" + itemRowsTerm + "<hr>" + "<div class='total'><span>TOTAL</span><span>" + fmt(ped.total) + "</span></div>" + (pgLabel ? "<div class='box'>" + pgLabel + "</div>" : "") + (ped.obs ? "<hr><div><span class='b'>Obs:</span> " + ped.obs + "</div>" : "") + "<hr>" + "<div class='center' style='margin-top:14px'>Assinatura: ______________________</div>" + "<div class='center' style='margin-top:16px'></div>" + "</body></html>";
     } else {
       const itemRows = (ped.itens || []).map(i => "<tr><td>" + i.name + "</td><td style='text-align:center'>" + i.qty + "x</td><td style='text-align:right;font-weight:600'>" + fmt(i.price * i.qty) + "</td></tr>").join("");
@@ -9334,7 +9397,7 @@ function EntregasPage(_ref24) {
         overflow: "hidden",
         zIndex: 20
       }
-    }, [["80mm", "\uD83E\uDDFE T\xE9rmica 80mm"], ["58mm", "\uD83E\uDDFE T\xE9rmica 58mm"], ["a4", "\uD83D\uDCC4 Folha A4"]].map(_ref2c => {
+    }, [["80mm", "\uD83E\uDDFE T\xE9rmica 80mm"], ["110mm", "\uD83E\uDDFE T\xE9rmica 110mm (Elgin L42 Pro)"], ["a4", "\uD83D\uDCC4 Folha A4"]].map(_ref2c => {
       let val = _ref2c[0],
         label = _ref2c[1];
       return /*#__PURE__*/React.createElement("button", {
@@ -12249,7 +12312,7 @@ function PDVApp() {
     });
   }, [products, searchProd, filterAvail, filterTipoVenda, priceMin, priceMax, sortBy, vendidoPorNome]);
   const dashSales = useMemo(() => {
-    const soProprio = (currentUser === null || currentUser === void 0 ? void 0 : currentUser.role) !== "admin" && (currentUser === null || currentUser === void 0 ? void 0 : (currentUser.permissions || {}).dashboardSoProprio) === true;
+    const soProprio = (currentUser === null || currentUser === void 0 ? void 0 : currentUser.role) !== "admin" && ((currentUser === null || currentUser === void 0 ? void 0 : (currentUser.permissions || {}).dashboardModo) || "completo") === "proprio";
     if (!soProprio || !currentUser) return sales;
     return sales.filter(s => (s.vendedor || "") === currentUser.name);
   }, [sales, currentUser]);
@@ -12331,7 +12394,7 @@ function PDVApp() {
     id: "dashboard",
     label: "Dashboard",
     icon: "home",
-    perm: (currentUser === null || currentUser === void 0 ? void 0 : currentUser.role) === "admin" || !(currentUser && currentUser.permissions && currentUser.permissions.dashboard === false)
+    perm: (currentUser === null || currentUser === void 0 ? void 0 : currentUser.role) === "admin" || ((currentUser === null || currentUser === void 0 ? void 0 : (currentUser.permissions || {}).dashboardModo) || "completo") !== "oculto"
   }, {
     id: "pdv",
     label: "PDV / Vendas",
