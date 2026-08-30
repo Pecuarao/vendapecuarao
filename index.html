@@ -158,7 +158,44 @@ const enrichComMatches = (prods, produtosExistentes) => prods.map(p => {
 });
 // Imprime um HTML usando iframe oculto — funciona em navegador, Android (WebView)
 // e no app Windows (Electron), onde window.open("", "_blank") costuma ser bloqueado.
-const printHTMLDoc = html => {
+const savePdfDoc = (d, fileName) => {
+  if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+    try {
+      const PdfPlugin = window.Capacitor.Plugins && window.Capacitor.Plugins.PdfPlugin;
+      if (PdfPlugin && PdfPlugin.openBase64Pdf) {
+        const base64 = d.output("datauristring");
+        PdfPlugin.openBase64Pdf({ base64, fileName }).catch(err => {
+          console.error("Erro ao abrir PDF (nativo):", err);
+          alert("Não foi possível abrir o PDF. Detalhe: " + (err && err.message ? err.message : err));
+        });
+        return;
+      }
+    } catch (e) {
+      console.error("Erro ao chamar PdfPlugin:", e);
+    }
+  }
+  // Navegador desktop / Electron: comportamento padrão do jsPDF (baixa o arquivo)
+  d.save(fileName);
+};
+
+const printHTMLDoc = (html, jobName) => {
+  // Dentro do app Android/iOS (Capacitor), window.print() não existe no WebView.
+  // Usa o plugin nativo (PrintPlugin) que abre a caixa de diálogo de impressão do sistema.
+  if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+    try {
+      const PrintPlugin = window.Capacitor.Plugins && window.Capacitor.Plugins.PrintPlugin;
+      if (PrintPlugin && PrintPlugin.printHtml) {
+        PrintPlugin.printHtml({ html, name: jobName || "Documento" }).catch(err => {
+          console.error("Erro ao imprimir (nativo):", err);
+          alert("Não foi possível abrir a impressão. Detalhe: " + (err && err.message ? err.message : err));
+        });
+        return;
+      }
+    } catch (e) {
+      console.error("Erro ao chamar PrintPlugin:", e);
+    }
+  }
+  // Navegador desktop / Electron (Windows): abordagem antiga via iframe + window.print()
   const iframe = document.createElement("iframe");
   iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
   document.body.appendChild(iframe);
@@ -242,6 +279,18 @@ const decodeBalancaBarcode = code => {
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const nowTime = () => new Date().toTimeString().slice(0, 5);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+// Soma N dias a uma data "yyyy-mm-dd" e devolve outra data "yyyy-mm-dd"
+const addDias = (dataStr, n) => {
+  const dt = new Date((dataStr || todayStr()) + "T12:00");
+  dt.setDate(dt.getDate() + n);
+  return dt.toISOString().slice(0, 10);
+};
+// Diferença em dias inteiros entre duas datas "yyyy-mm-dd" (a - b)
+const diffDias = (a, b) => {
+  const da = new Date(a + "T12:00");
+  const db = new Date(b + "T12:00");
+  return Math.round((da - db) / 86400000);
+};
 // ── Impressão de etiquetas Elgin L42 Pro Full (1 coluna 30x60mm ou 3 colunas 20x30mm) ──
 // items: array de { name, price, barcode }
 function printElginLabels(items, layout) {
@@ -256,25 +305,8 @@ function printElginLabels(items, layout) {
     const code = item.barcode || "";
     return "<div class='label'>" + "<div style='font-size:" + nomeSize + ";font-weight:700;line-height:1.15;max-height:2.4em;overflow:hidden'>" + nome + "</div>" + "<div style='font-size:" + precoSize + ";font-weight:900;color:#000;margin:1mm 0'>" + preco + "</div>" + (code ? "<svg class='bc' data-code='" + code + "'></svg><div style='font-size:6px;letter-spacing:1px'>" + code + "</div>" : "") + "</div>";
   }).join("");
-  const html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Etiquetas</title>" + "<style>" + pageCss + "*{font-family:Arial,sans-serif}.label{" + labelCss + "border:0}" + (layout === "3col" ? ".wrap{display:flex;flex-wrap:wrap}" : "") + "</style></head><body>" + "<div class='wrap'>" + labelsHtml + "</div>" + "<script src='https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js'><" + "/script>" + "<script>" + "window.onload=function(){" + "document.querySelectorAll('.bc').forEach(function(el){" + "try{JsBarcode(el, el.getAttribute('data-code'), {format:'CODE128',width:1.3,height:28,displayValue:false,margin:0});}catch(e){}" + "});" + "setTimeout(function(){window.print();},350);" + "};" + "<" + "/script>" + "</body></html>";
-  // Usa iframe oculto (evita bloqueio de pop-up no Electron/Windows e Android)
-  const iframe = document.createElement("iframe");
-  iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
-  document.body.appendChild(iframe);
-  iframe.contentDocument.open();
-  iframe.contentDocument.write(html);
-  iframe.contentDocument.close();
-  setTimeout(() => {
-    try {
-      iframe.contentWindow.focus();
-      iframe.contentWindow.print();
-    } catch (e) {}
-    setTimeout(() => {
-      try {
-        document.body.removeChild(iframe);
-      } catch (e) {}
-    }, 2000);
-  }, 600);
+  const html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Etiquetas</title>" + "<style>" + pageCss + "*{font-family:Arial,sans-serif}.label{" + labelCss + "border:0}" + (layout === "3col" ? ".wrap{display:flex;flex-wrap:wrap}" : "") + "</style></head><body>" + "<div class='wrap'>" + labelsHtml + "</div>" + "<script src='https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js'><" + "/script>" + "<script>" + "window.onload=function(){" + "document.querySelectorAll('.bc').forEach(function(el){" + "try{JsBarcode(el, el.getAttribute('data-code'), {format:'CODE128',width:1.3,height:28,displayValue:false,margin:0});}catch(e){}" + "});" + "};" + "<" + "/script>" + "</body></html>";
+  printHTMLDoc(html, "Etiquetas");
 }
 const load = (k, d) => {
   try {
@@ -533,7 +565,7 @@ const migratePhotosToStorage = async (products, onProgress) => {
     migrated: 0,
     failed: 0
   };
-  const toMigrate = products.filter(p => p.photo && p.photo.startsWith('data:image'));
+  const toMigrate = products.filter(p => p.photo && p.photo.startsWith('data:'));
   let migrated = 0,
     failed = 0;
   const updated = [...products];
@@ -668,6 +700,8 @@ const _toRow = {
     price: +(i.price || 0),
     cost_price: +(i.costPrice || 0),
     barcode: i.barcode || '',
+    fornecedor_id: i.fornecedorId || '',
+    fornecedor: i.fornecedor || '',
     created_at: i.createdAt || Date.now()
   })
 };
@@ -6749,11 +6783,14 @@ function ListaComprasPage(_ref20) {
   };
   // Busca a lista no servidor ao abrir a tela — a tabela lista_compras não vem
   // no get_all_data, então sem isso ela só existiria no aparelho e itens
-  // adicionados no celular nunca apareceriam no PC.
+  // adicionados no celular nunca apareceriam no PC. Com cooldown de 60s pra
+  // não bater no Supabase toda vez que o usuário só troca de aba.
   const _listaSyncRef = useRef(false);
   useEffect(() => {
     if (_listaSyncRef.current) return;
     _listaSyncRef.current = true;
+    const _ultimaSincroniaLista = parseInt(localStorage.getItem("_last_lista_sync") || "0", 10);
+    if (Date.now() - _ultimaSincroniaLista < 60000) return;
     syncLoadTable("lista_compras").then(rows => {
       if (!Array.isArray(rows)) return;
       const doServidor = rows.map(r => ({
@@ -6764,8 +6801,11 @@ function ListaComprasPage(_ref20) {
         price: +(r.price || 0),
         costPrice: +(r.cost_price || 0),
         barcode: r.barcode || "",
+        fornecedorId: r.fornecedor_id || "",
+        fornecedor: r.fornecedor || "",
         createdAt: r.created_at || Date.now()
       }));
+      localStorage.setItem("_last_lista_sync", String(Date.now()));
       const tomb = new Set((getTombstones()["lista_compras"] || []));
       setItems(prev => {
         const merged = mergeById(prev, doServidor, tomb);
@@ -7298,7 +7338,14 @@ function ListaComprasPage(_ref20) {
         fontSize: 11,
         flexShrink: 0
       }
-    }, item.qty))), item.fase === "recebido" && /*#__PURE__*/React.createElement("button", {
+    }, item.qty), item.fornecedor && /*#__PURE__*/React.createElement("span", {
+      style: {
+        ...S.badge("#2D3A8C"),
+        fontSize: 10,
+        flexShrink: 0
+      },
+      title: "Fornecedor"
+    }, "\uD83C\uDFED " + item.fornecedor))), item.fase === "recebido" && /*#__PURE__*/React.createElement("button", {
       onClick: () => abrirImpressao([item]),
       title: "Imprimir etiqueta",
       style: {
@@ -7388,7 +7435,9 @@ function ImportarPage(_ref21) {
   let S = _ref21.S,
     products = _ref21.products,
     persistP = _ref21.persistP,
-    notify = _ref21.notify;
+    notify = _ref21.notify,
+    fornecedores = _ref21.fornecedores || [],
+    persistForn = _ref21.persistForn;
   const _useState129 = useState([]),
     _useState130 = _slicedToArray(_useState129, 2),
     parsed = _useState130[0],
@@ -7422,10 +7471,18 @@ function ImportarPage(_ref21) {
     _useStateLI2 = _slicedToArray(_useStateLI, 2),
     lastImport = _useStateLI2[0],
     setLastImport = _useStateLI2[1];
-  const _useStateOF = useState("xml"),
+  const _useStateOF = useState("orcamento"),
     _useStateOF2 = _slicedToArray(_useStateOF, 2),
     origemFormato = _useStateOF2[0],
-    setOrigemFormato = _useStateOF2[1]; // "xml" (NF-e, entra direto no estoque) ou "orcamento" (PDF/CSV/TXT, vai pra Lista de Compras)
+    setOrigemFormato = _useStateOF2[1]; // sempre "orcamento" agora — XML, PDF, CSV e TXT vão todos para a Lista de Compras
+  const _useStateFornDet = useState(null),
+    _useStateFornDetB = _slicedToArray(_useStateFornDet, 2),
+    fornecedorDetectado = _useStateFornDetB[0],
+    setFornecedorDetectado = _useStateFornDetB[1]; // { nome, cnpj } lido do XML, se houver
+  const _useStateFornSel = useState(""),
+    _useStateFornSelB = _slicedToArray(_useStateFornSel, 2),
+    fornecedorSelId = _useStateFornSelB[0],
+    setFornecedorSelId = _useStateFornSelB[1]; // id do fornecedor escolhido pro lote atual
   const getCategoria = nome => {
     const d = nome.toLowerCase();
     if (/torneira|valvula|reparo|sifao|tubo|hidro|ducha|chuveiro|registro/.test(d)) return "Hidráulica";
@@ -7468,6 +7525,19 @@ function ImportarPage(_ref21) {
     const doc = new DOMParser().parseFromString(xmlText, "text/xml");
     const dets = doc.querySelectorAll("det");
     if (dets.length === 0) throw new Error("XML sem itens <det>.");
+    // Emitente (fornecedor) da nota — usado para vincular a Lista de Compras
+    let emitInfo = null;
+    const emitEl = doc.querySelector("emit");
+    if (emitEl) {
+      const cnpjEl = emitEl.querySelector("CNPJ");
+      const nomeEl = emitEl.querySelector("xNome");
+      if (cnpjEl || nomeEl) {
+        emitInfo = {
+          cnpj: cnpjEl ? cnpjEl.textContent.trim() : "",
+          nome: nomeEl ? nomeEl.textContent.trim() : ""
+        };
+      }
+    }
     const produtos = [];
     const seen = new Set();
     dets.forEach(det => {
@@ -7491,7 +7561,10 @@ function ImportarPage(_ref21) {
       produtos.push(makeProduto(desc, unid, qtd, preco, barcode));
     });
     if (produtos.length === 0) throw new Error("Nenhum produto no XML.");
-    return produtos;
+    return {
+      produtos,
+      emitInfo
+    };
   };
   const parseCSV = text => {
     var _text$split$, _text$split$2;
@@ -7831,10 +7904,19 @@ function ImportarPage(_ref21) {
     try {
       let produtos = [];
       const isXml = name.endsWith(".xml");
-      setOrigemFormato(isXml ? "xml" : "orcamento");
+      setOrigemFormato("orcamento"); // XML agora segue o mesmo fluxo do orçamento (vai para Lista de Compras)
+      setFornecedorDetectado(null);
+      setFornecedorSelId("");
       if (name.endsWith(".xml")) {
         const text = await file.text();
-        produtos = parseXML(text);
+        const xmlResult = parseXML(text);
+        produtos = xmlResult.produtos;
+        if (xmlResult.emitInfo && (xmlResult.emitInfo.cnpj || xmlResult.emitInfo.nome)) {
+          setFornecedorDetectado(xmlResult.emitInfo);
+          const cnpjLimpo = (xmlResult.emitInfo.cnpj || "").replace(/\D/g, "");
+          const match = cnpjLimpo && (fornecedores || []).find(f => (f.cnpj || "").replace(/\D/g, "") === cnpjLimpo);
+          if (match) setFornecedorSelId(match.id);
+        }
         notify(produtos.length + " item(ns) do XML ✓");
       } else if (name.endsWith(".csv")) {
         const text = await file.text();
@@ -7954,6 +8036,7 @@ function ImportarPage(_ref21) {
       notify("Selecione ao menos um.", "warn");
       return;
     }
+    const fornecedorEscolhido = (fornecedores || []).find(f => f.id === fornecedorSelId);
     const listaAtual = load("pdv_lista_compras", []);
     const novosItens = sel.map(p => ({
       id: uid(),
@@ -7963,14 +8046,18 @@ function ImportarPage(_ref21) {
       price: 0,
       costPrice: p.precoUnitario || 0,
       barcode: p.barcode || "",
+      fornecedorId: fornecedorEscolhido ? fornecedorEscolhido.id : "",
+      fornecedor: fornecedorEscolhido ? fornecedorEscolhido.nome : "",
       createdAt: Date.now()
     }));
     const listaNova = [...novosItens, ...listaAtual];
     save("pdv_lista_compras", listaNova);
     if (novosItens.length > 20) syncSave("lista_compras", novosItens);else novosItens.forEach(i => syncSaveOne("lista_compras", i));
-    notify(novosItens.length + " item(ns) enviado(s) para a Lista de Compras ✓");
+    notify(novosItens.length + " item(ns) enviado(s) para a Lista de Compras" + (fornecedorEscolhido ? " · " + fornecedorEscolhido.nome : "") + " ✓");
     setStep("done");
     setParsed([]);
+    setFornecedorDetectado(null);
+    setFornecedorSelId("");
   };
   const desfazerImportacao = () => {
     if (!lastImport) return;
@@ -8112,7 +8199,68 @@ function ImportarPage(_ref21) {
   }, /*#__PURE__*/React.createElement(Icon, {
     name: origemFormato === "xml" ? "import" : "list",
     size: 14
-  }), origemFormato === "xml" ? " Importar" : " Enviar p/ Lista de Compras"))), /*#__PURE__*/React.createElement("div", {
+  }), origemFormato === "xml" ? " Importar" : " Enviar p/ Lista de Compras"))), parsed.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.card,
+      padding: "10px 12px",
+      marginBottom: 12,
+      display: "flex",
+      flexDirection: "column",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: "var(--text-secondary)",
+      textTransform: "uppercase"
+    }
+  }, "\uD83C\uDFED Fornecedor desta importa\u00E7\u00E3o"), fornecedorDetectado && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "var(--text-secondary)"
+    }
+  }, "Detectado no XML: " + (fornecedorDetectado.nome || "\u2014") + (fornecedorDetectado.cnpj ? " \u00B7 " + fornecedorDetectado.cnpj : "") + (fornecedorSelId ? " (vinculado automaticamente)" : " \u2014 n\u00E3o cadastrado ainda")), /*#__PURE__*/React.createElement("select", {
+    value: fornecedorSelId,
+    onChange: e => setFornecedorSelId(e.target.value),
+    style: {
+      ...S.input,
+      fontSize: 13
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "\u2014 Sem fornecedor \u2014"), (fornecedores || []).map(f => /*#__PURE__*/React.createElement("option", {
+    key: f.id,
+    value: f.id
+  }, f.nome))), fornecedorDetectado && !fornecedorSelId && typeof persistForn === "function" && /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      const novo = {
+        id: uid(),
+        createdAt: Date.now(),
+        nome: fornecedorDetectado.nome || "Fornecedor",
+        cnpj: fornecedorDetectado.cnpj || "",
+        telefone: "",
+        email: "",
+        contato: "",
+        rua: "",
+        numero: "",
+        bairro: "",
+        cidade: "",
+        uf: "",
+        cep: "",
+        obs: "Cadastrado automaticamente a partir de importação de XML"
+      };
+      persistForn([novo, ...(fornecedores || [])]);
+      setFornecedorSelId(novo.id);
+      notify("Fornecedor \"" + novo.nome + "\" cadastrado ✓");
+    },
+    style: {
+      ...S.btn("ghost"),
+      fontSize: 12,
+      padding: "6px 10px",
+      alignSelf: "flex-start"
+    }
+  }, "+ Cadastrar \"" + fornecedorDetectado.nome + "\" como fornecedor")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -8485,7 +8633,68 @@ function ImportarPage(_ref21) {
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "edit",
     size: 14
-  })))))), /*#__PURE__*/React.createElement("div", {
+  })))))), parsed.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.card,
+      padding: "10px 12px",
+      marginTop: 14,
+      display: "flex",
+      flexDirection: "column",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: "var(--text-secondary)",
+      textTransform: "uppercase"
+    }
+  }, "\uD83C\uDFED Fornecedor desta importa\u00E7\u00E3o"), fornecedorDetectado && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "var(--text-secondary)"
+    }
+  }, "Detectado no XML: " + (fornecedorDetectado.nome || "\u2014") + (fornecedorDetectado.cnpj ? " \u00B7 " + fornecedorDetectado.cnpj : "") + (fornecedorSelId ? " (vinculado automaticamente)" : " \u2014 n\u00E3o cadastrado ainda")), /*#__PURE__*/React.createElement("select", {
+    value: fornecedorSelId,
+    onChange: e => setFornecedorSelId(e.target.value),
+    style: {
+      ...S.input,
+      fontSize: 13
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "\u2014 Sem fornecedor \u2014"), (fornecedores || []).map(f => /*#__PURE__*/React.createElement("option", {
+    key: f.id,
+    value: f.id
+  }, f.nome))), fornecedorDetectado && !fornecedorSelId && typeof persistForn === "function" && /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      const novo = {
+        id: uid(),
+        createdAt: Date.now(),
+        nome: fornecedorDetectado.nome || "Fornecedor",
+        cnpj: fornecedorDetectado.cnpj || "",
+        telefone: "",
+        email: "",
+        contato: "",
+        rua: "",
+        numero: "",
+        bairro: "",
+        cidade: "",
+        uf: "",
+        cep: "",
+        obs: "Cadastrado automaticamente a partir de importação de XML"
+      };
+      persistForn([novo, ...(fornecedores || [])]);
+      setFornecedorSelId(novo.id);
+      notify("Fornecedor \"" + novo.nome + "\" cadastrado ✓");
+    },
+    style: {
+      ...S.btn("ghost"),
+      fontSize: 12,
+      padding: "6px 10px",
+      alignSelf: "flex-start"
+    }
+  }, "+ Cadastrar \"" + fornecedorDetectado.nome + "\" como fornecedor")), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 16,
       paddingTop: 16,
@@ -8686,8 +8895,22 @@ function ImportarPage(_ref21) {
         try {
           var _txt$split$;
           const isXml = txt.includes("<det");
-          setOrigemFormato(isXml ? "xml" : "orcamento");
-          const prods = isXml ? parseXML(txt) : txt.includes(",") && ((_txt$split$ = txt.split("\n")[0]) === null || _txt$split$ === void 0 ? void 0 : _txt$split$.split(",").length) > 2 ? parseCSV(txt) : parseTXT(txt);
+          setOrigemFormato("orcamento"); // XML agora segue o mesmo fluxo do orçamento (vai para Lista de Compras)
+          setFornecedorDetectado(null);
+          setFornecedorSelId("");
+          let prods;
+          if (isXml) {
+            const xmlResult = parseXML(txt);
+            prods = xmlResult.produtos;
+            if (xmlResult.emitInfo && (xmlResult.emitInfo.cnpj || xmlResult.emitInfo.nome)) {
+              setFornecedorDetectado(xmlResult.emitInfo);
+              const cnpjLimpo = (xmlResult.emitInfo.cnpj || "").replace(/\D/g, "");
+              const match = cnpjLimpo && (fornecedores || []).find(f => (f.cnpj || "").replace(/\D/g, "") === cnpjLimpo);
+              if (match) setFornecedorSelId(match.id);
+            }
+          } else {
+            prods = txt.includes(",") && ((_txt$split$ = txt.split("\n")[0]) === null || _txt$split$ === void 0 ? void 0 : _txt$split$.split(",").length) > 2 ? parseCSV(txt) : parseTXT(txt);
+          }
           setParsed(enrichComMatches(prods, products));
           setStep("review");
           notify(prods.length + " produto(s) ✓");
@@ -8956,36 +9179,7 @@ function EntregasPage(_ref24) {
       const css = "*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}body{font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;color:#111;}table{width:100%;border-collapse:collapse;font-size:12px;}th{background:#f3f4f6;padding:6px;text-align:left;font-size:10px;text-transform:uppercase;}td{padding:6px;border-bottom:1px solid #f3f4f6;}.total{font-size:16px;font-weight:800;text-align:right;margin-top:10px;color:#2D3A8C;}@media print{body{max-width:100%;padding:8px}}";
       html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + ped.numero + "</title><style>" + css + "</style></head><body>" + "<div style='background:#2D3A8C;color:#fff;padding:14px;border-radius:8px;margin-bottom:16px;display:flex;align-items:center;gap:12px'>" + "<img src='" + LOGO_SRC + "' alt='logo' style='height:40px;flex-shrink:0'/>" + "<div style='text-align:left'>" + "<div style='font-size:15px;font-weight:800;letter-spacing:1px'>PEDIDO DE ENTREGA</div>" + "<div style='font-size:11px;margin-top:3px;opacity:.85'>" + ped.numero + " · " + ped.criadoData + " " + ped.criadoHora + "</div>" + "</div>" + "</div>" + "<div style='background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-bottom:12px;font-size:12px'>" + "<div style='display:flex;justify-content:space-between;margin-bottom:4px'>" + "<span><b>Status:</b> " + st.emoji + " " + st.label + "</span>" + "<span><b>Total:</b> <span style='color:#2D3A8C;font-weight:800'>" + fmt(ped.total) + "</span></span></div>" + "<b>Cliente:</b> " + ped.cliente + (ped.telefone ? " · 📞" + ped.telefone : "") + "<br>" + (ped.endereco ? "<b>Endereço:</b> 📍" + ped.endereco + "<br>" : "") + "</div>" + "<table><thead><tr><th>Produto</th><th style='text-align:center'>Qtd</th><th style='text-align:right'>Valor</th></tr></thead><tbody>" + itemRows + "</tbody></table>" + "<div class='total'>TOTAL: " + fmt(ped.total) + "</div>" + (pgLabel ? "<div style='margin-top:10px;padding:10px;border-radius:6px;border:2px solid " + pgColor + ";font-size:13px;font-weight:800;text-align:center;color:" + pgColor + "'>" + pgLabel + "</div>" : "") + (ped.obs ? "<div style='background:#fffbeb;border:1px solid #fef08a;padding:8px;border-radius:6px;font-size:12px;margin-top:8px'><b>Obs:</b> " + ped.obs + "</div>" : "") + "<div style='border-top:2px solid #2D3A8C;margin-top:20px;padding-top:14px;font-size:11px;color:#888;text-align:center'>" + "Assinatura do recebedor: _______________________________<br><br>Data: _____ / _____ / _______" + "</div>" + "</body></html>";
     }
-    // Usa iframe para evitar bloqueio de popup
-    const iframe = document.createElement("iframe");
-    iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
-    document.body.appendChild(iframe);
-    iframe.contentDocument.open();
-    iframe.contentDocument.write(html);
-    iframe.contentDocument.close();
-    setTimeout(() => {
-      try {
-        iframe.contentWindow.focus();
-        iframe.contentWindow.print();
-      } catch (e) {
-        // Fallback: window.open
-        const w = window.open("", "_blank", "width=520,height=750");
-        if (w) {
-          w.document.write(html);
-          w.document.close();
-          setTimeout(() => {
-            try {
-              w.print();
-            } catch (_) {}
-          }, 400);
-        } else notify("Permita pop-ups para imprimir.", "warn");
-      }
-      setTimeout(() => {
-        try {
-          document.body.removeChild(iframe);
-        } catch (_) {}
-      }, 3000);
-    }, 500);
+    printHTMLDoc(html, ped.numero || "Pedido");
   };
   const vendaSelecionada = sales.find(s => s.id === nForm.vendaId);
   const clienteSel = customers.find(c => c.name === ((vendaSelecionada === null || vendaSelecionada === void 0 ? void 0 : vendaSelecionada.customer) || nForm.cliente));
@@ -10738,7 +10932,8 @@ function RelatoriosPage(_refRel) {
     fornecedores = _refRel.fornecedores,
     products = _refRel.products,
     users = _refRel.users,
-    notify = _refRel.notify;
+    notify = _refRel.notify,
+    persistS = _refRel.persistS;
   const _rState = useState("vendas"),
     _rStateB = _slicedToArray(_rState, 2),
     tipo = _rStateB[0],
@@ -10807,6 +11002,47 @@ function RelatoriosPage(_refRel) {
       qtdAtacado: atacado.length,
       totalVarejo: varejo.reduce((s, v) => s + (v.total || 0), 0),
       qtdVarejo: varejo.length
+    };
+  })();
+
+  // ── ATACADO ── (relatório dedicado: total, produtos e clientes do atacado)
+  const relAtacado = (() => {
+    const vendasAtacado = vendasPer.filter(s => s.tipo === "atacado");
+    const total = vendasAtacado.reduce((s, v) => s + (v.total || 0), 0);
+    const qtd = vendasAtacado.length;
+    const ticket = qtd > 0 ? total / qtd : 0;
+    const mapaProd = {};
+    vendasAtacado.forEach(s => {
+      (s.items || []).forEach(i => {
+        const nome = i.name || "—";
+        if (!mapaProd[nome]) mapaProd[nome] = {
+          nome,
+          qtd: 0,
+          fat: 0
+        };
+        mapaProd[nome].qtd += i.qty || 0;
+        mapaProd[nome].fat += (i.price || 0) * (i.qty || 0);
+      });
+    });
+    const produtos = Object.values(mapaProd).sort((a, b) => b.fat - a.fat);
+    const mapaCli = {};
+    vendasAtacado.forEach(s => {
+      const nome = s.customer || "Avulso";
+      if (!mapaCli[nome]) mapaCli[nome] = {
+        nome,
+        total: 0,
+        qtd: 0
+      };
+      mapaCli[nome].total += s.total || 0;
+      mapaCli[nome].qtd += 1;
+    });
+    const clientes = Object.values(mapaCli).sort((a, b) => b.total - a.total);
+    return {
+      total,
+      qtd,
+      ticket,
+      produtos,
+      clientes
     };
   })();
 
@@ -10994,15 +11230,25 @@ function RelatoriosPage(_refRel) {
     };
   })();
 
-  // ── FORNECEDORES ──
-  const relFornecedores = (fornecedores || []).map(f => ({
-    nome: f.nome || "—",
-    cnpj: f.cnpj || "",
-    telefone: f.telefone || "",
-    cidade: f.cidade || ""
-  })).sort((a, b) => a.nome.localeCompare(b.nome));
+  // ── FORNECEDORES ── (inclui total comprado/pendente via Lista de Compras)
+  const itensListaCompras = load("pdv_lista_compras", []);
+  const relFornecedores = (fornecedores || []).map(f => {
+    const itensDoFornecedor = itensListaCompras.filter(it => it.fornecedorId === f.id);
+    const recebidos = itensDoFornecedor.filter(it => it.fase === "recebido");
+    const pendentes = itensDoFornecedor.filter(it => it.fase !== "recebido");
+    const totalComprado = recebidos.reduce((s, it) => s + (parseFloat(it.costPrice) || 0) * (parseFloat(it.qty) || 0), 0);
+    return {
+      nome: f.nome || "—",
+      cnpj: f.cnpj || "",
+      telefone: f.telefone || "",
+      cidade: f.cidade || "",
+      qtdItens: itensDoFornecedor.length,
+      qtdPendentes: pendentes.length,
+      totalComprado
+    };
+  }).sort((a, b) => a.nome.localeCompare(b.nome));
 
-  const temporal = tipo !== "entregas" && tipo !== "fornecedores" && tipo !== "estoque";
+  const temporal = tipo !== "entregas" && tipo !== "fornecedores" && tipo !== "estoque" && tipo !== "prazo";
   const periodoLabel = periodo === "hoje" ? "Hoje" : periodo === "7dias" ? "Últimos 7 dias" : periodo === "30dias" ? "Últimos 30 dias" : periodo === "personalizado" ? (dataIni || "início") + " até " + (dataFim || "hoje") : "Todo o período";
 
   // ── PDF ──
@@ -11034,6 +11280,9 @@ function RelatoriosPage(_refRel) {
     } else if (tipo === "pagamento") {
       titulo = "Relatório de Meios de Pagamento";
       corpo = "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Forma</th><th " + th + " style='text-align:center'>Qtd</th><th " + th + " style='text-align:right'>Total</th></tr>" + relPagamento.map(p => "<tr><td " + td + ">" + p.forma + "</td><td " + tdC + ">" + p.qtd + "</td><td " + tdR + ">" + fmt(p.total) + "</td></tr>").join("") + "</table>";
+    } else if (tipo === "atacado") {
+      titulo = "Relatório de Atacado";
+      corpo = "<table style='width:100%;border-collapse:collapse'>" + "<tr><td " + td + ">Total vendido</td><td " + tdR + "><b>" + fmt(relAtacado.total) + "</b></td></tr>" + "<tr><td " + td + ">Quantidade de vendas</td><td " + tdR + ">" + relAtacado.qtd + "</td></tr>" + "<tr><td " + td + ">Ticket médio</td><td " + tdR + ">" + fmt(relAtacado.ticket) + "</td></tr>" + "</table>" + "<h3 style='margin:18px 0 8px;font-size:14px'>Produtos mais vendidos</h3>" + "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Produto</th><th " + th + " style='text-align:center'>Qtd</th><th " + th + " style='text-align:right'>Faturamento</th></tr>" + relAtacado.produtos.map(p => "<tr><td " + td + ">" + p.nome + "</td><td " + tdC + ">" + p.qtd + "</td><td " + tdR + ">" + fmt(p.fat) + "</td></tr>").join("") + "</table>" + "<h3 style='margin:18px 0 8px;font-size:14px'>Clientes</h3>" + "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Cliente</th><th " + th + " style='text-align:center'>Compras</th><th " + th + " style='text-align:right'>Total</th></tr>" + relAtacado.clientes.map(c => "<tr><td " + td + ">" + c.nome + "</td><td " + tdC + ">" + c.qtd + "</td><td " + tdR + ">" + fmt(c.total) + "</td></tr>").join("") + "</table>";
     } else if (tipo === "produtos") {
       titulo = "Produtos — Retorno no Período";
       const ord = [...relProdutos].sort((a, b) => b.lucro - a.lucro);
@@ -11046,14 +11295,14 @@ function RelatoriosPage(_refRel) {
       corpo = "<table style='width:100%;border-collapse:collapse'>" + "<tr><td " + td + ">📋 Pedido</td><td " + tdR + ">" + relEntregas.porStatus.pedido + "</td></tr>" + "<tr><td " + td + ">📦 Separando</td><td " + tdR + ">" + relEntregas.porStatus.separando + "</td></tr>" + "<tr><td " + td + ">🚚 Em Rota</td><td " + tdR + ">" + relEntregas.porStatus.rota + "</td></tr>" + "<tr><td " + td + ">✅ Concluído</td><td " + tdR + ">" + relEntregas.porStatus.concluido + "</td></tr>" + "<tr><td " + td + "><b>Total</b></td><td " + tdR + "><b>" + relEntregas.qtd + "</b></td></tr>" + "<tr><td " + td + ">Valor total</td><td " + tdR + ">" + fmt(relEntregas.totalValor) + "</td></tr></table>";
     } else if (tipo === "fornecedores") {
       titulo = "Relatório de Fornecedores";
-      corpo = "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Fornecedor</th><th " + th + ">CNPJ</th><th " + th + ">Telefone</th><th " + th + ">Cidade</th></tr>" + relFornecedores.map(f => "<tr><td " + td + ">" + f.nome + "</td><td " + td + ">" + f.cnpj + "</td><td " + td + ">" + f.telefone + "</td><td " + td + ">" + f.cidade + "</td></tr>").join("") + "</table>";
+      corpo = "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Fornecedor</th><th " + th + ">CNPJ</th><th " + th + ">Telefone</th><th " + th + ">Cidade</th><th " + th + " style='text-align:right'>Total comprado</th><th " + th + " style='text-align:center'>Pendentes</th></tr>" + relFornecedores.map(f => "<tr><td " + td + ">" + f.nome + "</td><td " + td + ">" + f.cnpj + "</td><td " + td + ">" + f.telefone + "</td><td " + td + ">" + f.cidade + "</td><td " + td + " style='text-align:right'>" + (f.totalComprado > 0 ? fmt(f.totalComprado) : "—") + "</td><td " + td + " style='text-align:center'>" + (f.qtdPendentes > 0 ? f.qtdPendentes : "—") + "</td></tr>").join("") + "</table>";
     }
     const contexto = tipo === "entregas" || tipo === "fornecedores" || tipo === "estoque" ? "Situação atual" : periodoLabel;
     const htmlRel = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + titulo + "</title><style>*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}</style></head>" + "<body style='font-family:Arial,sans-serif;padding:30px;color:#222'>" + "<h2 style='color:#E8682A;margin:0 0 4px'>" + titulo + "</h2>" + "<div style='color:#666;font-size:13px;margin-bottom:18px'>VENDAS PECUARÃO · " + contexto + " · " + new Date().toLocaleString("pt-BR") + "</div>" + corpo + "</body></html>";
     printHTMLDoc(htmlRel);
   };
 
-  const abas = [["vendas", "💰 Vendas"], ["lucro", "📈 Lucro"], ["comissao", "🤝 Comissão"], ["produtos", "🏆 Produtos"], ["estoque", "📦 Estoque"], ["clientes", "👥 Clientes"], ["entregas", "🚚 Entregas"], ["fornecedores", "🏭 Fornecedores"], ["pagamento", "💳 Pagamentos"]];
+  const abas = [["vendas", "💰 Vendas"], ["atacado", "📦 Atacado"], ["prazo", "🗓️ Venda a Prazo"], ["lucro", "📈 Lucro"], ["comissao", "🤝 Comissão"], ["produtos", "🏆 Produtos"], ["estoque", "📦 Estoque"], ["clientes", "👥 Clientes"], ["entregas", "🚚 Entregas"], ["fornecedores", "🏭 Fornecedores"], ["pagamento", "💳 Pagamentos"]];
 
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -11150,7 +11399,7 @@ function RelatoriosPage(_refRel) {
   }, "\uD83D\uDC65 Todos os clientes (ranking)"), nomesClientesParaFiltro.map(nome => /*#__PURE__*/React.createElement("option", {
     key: nome,
     value: nome
-  }, nome)))), /*#__PURE__*/React.createElement("button", {
+  }, nome)))), tipo !== "prazo" && /*#__PURE__*/React.createElement("button", {
     onClick: gerarPDF,
     style: {
       ...S.btn("ghost"),
@@ -11160,13 +11409,14 @@ function RelatoriosPage(_refRel) {
       marginBottom: 14,
       fontSize: 13
     }
-  }, "🖨️ Gerar PDF deste relatório"), /*#__PURE__*/React.createElement("div", {
+  }, "🖨️ Gerar PDF deste relatório"), tipo !== "prazo" && /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.card,
       padding: "16px"
     }
   }, renderRelatorioConteudo(tipo, {
     relVendas,
+    relAtacado,
     relLucro,
     relComissao,
     relClientes,
@@ -11177,7 +11427,307 @@ function RelatoriosPage(_refRel) {
     relEntregas,
     relFornecedores,
     S
-  })));
+  })), tipo === "prazo" && /*#__PURE__*/React.createElement(PrazoReportView, {
+    sales: sales,
+    customers: customers,
+    persistS: persistS,
+    notify: notify,
+    S: S
+  }));
+}
+
+// ── Relatório de Venda a Prazo (clientes → notinhas → marcar como paga) ──
+function PrazoReportView(props) {
+  const sales = props.sales,
+    customers = props.customers,
+    persistS = props.persistS,
+    notify = props.notify,
+    S = props.S;
+  const _pcSel = useState(null),
+    _pcSelB = _slicedToArray(_pcSel, 2),
+    clienteSel = _pcSelB[0],
+    setClienteSel = _pcSelB[1];
+  const _pcFiltro = useState("pendentes"),
+    _pcFiltroB = _slicedToArray(_pcFiltro, 2),
+    filtro = _pcFiltroB[0],
+    setFiltro = _pcFiltroB[1];
+  const _pcSelecs = useState([]),
+    _pcSelecsB = _slicedToArray(_pcSelecs, 2),
+    selecionadas = _pcSelecsB[0],
+    setSelecionadas = _pcSelecsB[1];
+
+  const hoje = todayStr();
+  const vendasPrazo = (sales || []).filter(s => s.payment === "A Prazo");
+  const withStatus = vendasPrazo.map(s => {
+    const vencimento = s.prazoVencimento || addDias(s.date, 30);
+    const pago = s.prazoPago === true;
+    const atrasada = !pago && vencimento < hoje;
+    const diasAtraso = atrasada ? diffDias(hoje, vencimento) : 0;
+    return {
+      ...s,
+      vencimento,
+      pago,
+      atrasada,
+      diasAtraso
+    };
+  });
+
+  const porCliente = {};
+  withStatus.forEach(s => {
+    const nome = s.customer || "Avulso";
+    if (!porCliente[nome]) porCliente[nome] = {
+      nome,
+      notas: [],
+      pendentes: 0,
+      atrasadas: 0,
+      totalPendente: 0
+    };
+    porCliente[nome].notas.push(s);
+    if (!s.pago) {
+      porCliente[nome].pendentes++;
+      porCliente[nome].totalPendente += s.total || 0;
+      if (s.atrasada) porCliente[nome].atrasadas++;
+    }
+  });
+  const listaClientes = Object.values(porCliente).sort((a, b) => {
+    if (a.atrasadas !== b.atrasadas) return b.atrasadas - a.atrasadas;
+    return b.totalPendente - a.totalPendente;
+  });
+  const totalGeralPendente = listaClientes.reduce((s, c) => s + c.totalPendente, 0);
+  const totalGeralAtrasadas = listaClientes.reduce((s, c) => s + c.atrasadas, 0);
+
+  const toggleSel = id => setSelecionadas(sel => sel.includes(id) ? sel.filter(x => x !== id) : [...sel, id]);
+
+  const marcarPagas = () => {
+    if (selecionadas.length === 0) return;
+    persistS((sales || []).map(s => selecionadas.includes(s.id) ? {
+      ...s,
+      prazoPago: true,
+      prazoPagoEm: todayStr()
+    } : s));
+    notify(selecionadas.length + " nota(s) marcada(s) como paga(s)", "success");
+    setSelecionadas([]);
+  };
+
+  // ── Vista: lista de clientes ──
+  if (!clienteSel) {
+    return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        ...S.card,
+        padding: "14px",
+        marginBottom: 14,
+        display: "flex",
+        justifyContent: "space-between",
+        flexWrap: "wrap",
+        gap: 10
+      }
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: "var(--text-secondary)",
+        textTransform: "uppercase"
+      }
+    }, "Total pendente"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 20,
+        fontWeight: 800,
+        color: "#c0392b"
+      }
+    }, fmt(totalGeralPendente))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: "var(--text-secondary)",
+        textTransform: "uppercase"
+      }
+    }, "Notas atrasadas"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 20,
+        fontWeight: 800,
+        color: totalGeralAtrasadas > 0 ? "#c0392b" : "#4ade80"
+      }
+    }, totalGeralAtrasadas))), listaClientes.length === 0 ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        textAlign: "center",
+        color: "var(--text-secondary)",
+        padding: 30
+      }
+    }, "Nenhuma venda a prazo registrada.") : listaClientes.map(c => /*#__PURE__*/React.createElement("div", {
+      key: c.nome,
+      onClick: () => {
+        setClienteSel(c.nome);
+        setSelecionadas([]);
+        setFiltro("pendentes");
+      },
+      style: {
+        ...S.card,
+        padding: "12px 14px",
+        marginBottom: 8,
+        cursor: "pointer",
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center"
+      }
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 14
+      }
+    }, c.nome), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: "var(--text-secondary)",
+        marginTop: 2
+      }
+    }, c.pendentes + " pendente(s)" + (c.atrasadas > 0 ? " · " + c.atrasadas + " atrasada(s)" : ""))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        textAlign: "right",
+        fontWeight: 800,
+        fontSize: 14,
+        color: c.atrasadas > 0 ? "#c0392b" : "var(--text-primary)"
+      }
+    }, fmt(c.totalPendente), " ", /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--text-secondary)",
+        fontWeight: 400
+      }
+    }, "›")))));
+  }
+
+  // ── Vista: notinhas de um cliente ──
+  const cliente = porCliente[clienteSel];
+  const notasFiltradas = cliente.notas.filter(n => {
+    if (filtro === "pendentes") return !n.pago;
+    if (filtro === "atrasadas") return !n.pago && n.atrasada;
+    if (filtro === "pagas") return n.pago;
+    return true;
+  }).sort((a, b) => a.date < b.date ? 1 : -1);
+
+  const exportarPDF = () => {
+    const th = "style='text-align:left;padding:8px;border-bottom:2px solid #333;font-size:12px'";
+    const td = "style='padding:7px 8px;border-bottom:1px solid #ddd;font-size:12px'";
+    const linhas = cliente.notas.slice().sort((a, b) => a.date < b.date ? 1 : -1).map(n => "<tr><td " + td + ">" + n.date + "</td><td " + td + ">" + fmt(n.total) + "</td><td " + td + ">" + n.vencimento + "</td><td " + td + ">" + (n.pago ? "Paga" : n.atrasada ? "Atrasada (" + n.diasAtraso + "d)" : "No prazo") + "</td></tr>").join("");
+    const html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Venda a Prazo - " + cliente.nome + "</title></head>" + "<body style='font-family:Arial,sans-serif;padding:30px;color:#222'>" + "<h2 style='color:#E8682A;margin:0 0 4px'>Venda a Prazo — " + cliente.nome + "</h2>" + "<div style='color:#666;font-size:13px;margin-bottom:18px'>VENDAS PECUARÃO · " + new Date().toLocaleString("pt-BR") + "</div>" + "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Data</th><th " + th + ">Valor</th><th " + th + ">Vencimento</th><th " + th + ">Situação</th></tr>" + linhas + "</table>" + "<p style='margin-top:16px;font-size:13px'><b>Total pendente:</b> " + fmt(cliente.totalPendente) + "</p>" + "</body></html>";
+    printHTMLDoc(html, "Venda a Prazo - " + cliente.nome);
+  };
+
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setClienteSel(null);
+      setSelecionadas([]);
+    },
+    style: {
+      ...S.btn("ghost"),
+      marginBottom: 12,
+      fontSize: 12,
+      padding: "6px 12px"
+    }
+  }, "← Voltar"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.card,
+      padding: "14px",
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 800,
+      fontSize: 16
+    }
+  }, cliente.nome), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "var(--text-secondary)",
+      marginTop: 2
+    }
+  }, cliente.pendentes + " pendente(s) · " + fmt(cliente.totalPendente) + (cliente.atrasadas > 0 ? " · " + cliente.atrasadas + " atrasada(s)" : ""))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      marginBottom: 10,
+      flexWrap: "wrap"
+    }
+  }, [["pendentes", "Pendentes"], ["atrasadas", "Atrasadas"], ["pagas", "Pagas"], ["todas", "Todas"]].map(par => /*#__PURE__*/React.createElement("button", {
+    key: par[0],
+    onClick: () => setFiltro(par[0]),
+    style: {
+      ...S.btn(filtro === par[0] ? "primary" : "ghost"),
+      padding: "6px 12px",
+      fontSize: 12
+    }
+  }, par[1]))), /*#__PURE__*/React.createElement("button", {
+    onClick: exportarPDF,
+    style: {
+      ...S.btn("ghost"),
+      width: "100%",
+      justifyContent: "center",
+      padding: "10px",
+      marginBottom: 10,
+      fontSize: 13
+    }
+  }, "🖨️ Exportar PDF"), selecionadas.length > 0 && /*#__PURE__*/React.createElement("button", {
+    onClick: marcarPagas,
+    style: {
+      ...S.btn("primary"),
+      width: "100%",
+      justifyContent: "center",
+      padding: "10px",
+      marginBottom: 10,
+      fontSize: 13,
+      background: "#22c55e",
+      borderColor: "#22c55e"
+    }
+  }, "✅ Marcar " + selecionadas.length + " selecionada(s) como paga(s)"), notasFiltradas.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: "center",
+      color: "var(--text-secondary)",
+      padding: 20
+    }
+  }, "Nenhuma nota nessa situação.") : notasFiltradas.map(n => {
+    const statusLabel = n.pago ? "✅ Paga" : n.atrasada ? "🔴 Atrasada " + n.diasAtraso + "d" : "🟡 No prazo";
+    const statusColor = n.pago ? "#4ade80" : n.atrasada ? "#c0392b" : "#f59e0b";
+    return /*#__PURE__*/React.createElement("div", {
+      key: n.id,
+      style: {
+        ...S.card,
+        padding: "10px 12px",
+        marginBottom: 6,
+        display: "flex",
+        alignItems: "center",
+        gap: 10
+      }
+    }, !n.pago && /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: selecionadas.includes(n.id),
+      onChange: () => toggleSel(n.id),
+      style: {
+        width: 18,
+        height: 18,
+        flexShrink: 0,
+        accentColor: "#E8682A",
+        cursor: "pointer"
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 600
+      }
+    }, fmt(n.total) + " · Nº " + n.id.slice(-6).toUpperCase()), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: "var(--text-secondary)"
+      }
+    }, "Venda: " + n.date + " · Vence: " + n.vencimento)), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: statusColor,
+        whiteSpace: "nowrap"
+      }
+    }, statusLabel));
+  }));
 }
 
 // Renderiza o conteúdo do relatório selecionado na tela
@@ -11216,6 +11766,30 @@ function renderRelatorioConteudo(tipo, d) {
   if (tipo === "vendas") {
     const v = d.relVendas;
     return /*#__PURE__*/React.createElement("div", null, linha("Total de vendas", fmt(v.total), "#4ade80"), linha("Quantidade", v.qtd + " venda(s)"), linha("Ticket médio", fmt(v.ticket)), linha("🏪 Varejo", v.qtdVarejo + " · " + fmt(v.totalVarejo)), linha("📦 Atacado", v.qtdAtacado + " · " + fmt(v.totalAtacado)));
+  }
+  if (tipo === "atacado") {
+    const a = d.relAtacado;
+    if (a.qtd === 0) return vazio("Nenhuma venda de atacado no período.");
+    return /*#__PURE__*/React.createElement("div", null, linha("Total vendido", fmt(a.total), "#f59e0b"), linha("Quantidade de vendas", a.qtd + ""), linha("Ticket médio", fmt(a.ticket)), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        fontWeight: 700,
+        color: "#E8682A",
+        margin: "14px 0 4px"
+      }
+    }, "🏆 Produtos mais vendidos"), a.produtos.slice(0, 10).map((p, i) => linha((i + 1) + ". " + p.nome, p.qtd + " un · " + fmt(p.fat), i === 0 ? "#f59e0b" : null)), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        fontWeight: 700,
+        color: "#E8682A",
+        margin: "14px 0 4px"
+      }
+    }, "👥 Clientes atacado"), a.clientes.length === 0 ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: "var(--text-secondary)"
+      }
+    }, "—") : a.clientes.slice(0, 10).map((c, i) => linha((i + 1) + ". " + c.nome + " (" + c.qtd + ")", fmt(c.total), i === 0 ? "#f59e0b" : null)));
   }
   if (tipo === "lucro") {
     const l = d.relLucro;
@@ -11371,9 +11945,13 @@ function renderRelatorioConteudo(tipo, d) {
       key: i,
       style: {
         padding: "9px 0",
-        borderBottom: "1px solid var(--bg-elevated)"
+        borderBottom: "1px solid var(--bg-elevated)",
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        gap: 10
       }
-    }, /*#__PURE__*/React.createElement("div", {
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 13,
         fontWeight: 700
@@ -11383,7 +11961,23 @@ function renderRelatorioConteudo(tipo, d) {
         fontSize: 12,
         color: "var(--text-secondary)"
       }
-    }, [f.cnpj, f.telefone, f.cidade].filter(Boolean).join(" · ")))));
+    }, [f.cnpj, f.telefone, f.cidade].filter(Boolean).join(" · "))), (f.totalComprado > 0 || f.qtdPendentes > 0) && /*#__PURE__*/React.createElement("div", {
+      style: {
+        textAlign: "right",
+        flexShrink: 0
+      }
+    }, f.totalComprado > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 700,
+        color: "#4ade80"
+      }
+    }, fmt(f.totalComprado)), f.qtdPendentes > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: "#f59e0b"
+      }
+    }, f.qtdPendentes + " pendente(s)")))));
   }
   return null;
 }
@@ -11710,43 +12304,59 @@ function PDVApp() {
     setTimeout(() => setToast(null), 2600);
   };
 
-  // ── SYNC: carrega do servidor e polling 8s ───────────────────────────────
+  // ── SYNC: carrega do servidor uma vez por sessão, com cooldown anti-excesso ──
   const _syncRef = useRef(false);
 
-  // Carrega dados do Supabase uma vez ao iniciar (sem polling)
+  // Carrega dados do Supabase ao iniciar — mas só bate no servidor se tiver
+  // passado mais de 5 minutos desde a última carga completa. Isso evita o
+  // bloqueio por excesso de requisições no Supabase quando o app é reaberto
+  // muitas vezes seguidas (o Android recria a tela ao voltar do segundo
+  // plano, e cada recriação disparava uma busca completa nova — e essa busca
+  // é pesada, pois traz todo o histórico de vendas/entregas). Dentro da
+  // janela de 5min, usa os dados já salvos no aparelho e libera a tela na
+  // hora — sem esperar o servidor. O botão "Atualizar" (reloadFromSupabase)
+  // continua batendo no servidor na hora, sem respeitar esse cooldown.
   if (!_syncRef.current && keyReady) {
     _syncRef.current = true;
-    syncLoad().then(async data => {
-      if (data) {
-        const tomb = getTombstones();
-        const tset = col => new Set(tomb[col] || []);
-        if (Array.isArray(data.products)) setProducts(prev => { const m = mergeComServidor("products", prev, data.products); save("pdv_products", m); return m; });
-        if (Array.isArray(data.customers)) setCustomers(prev => { const m = mergeComServidor("customers", prev, data.customers); save("pdv_customers", m); return m; });
-        if (Array.isArray(data.sales)) setSales(prev => {
-          const merged = mergeComServidor("sales", prev, data.sales);
-          save("pdv_sales", merged);
-          return merged;
-        });
-        if (Array.isArray(data.entregas)) setPedidos(prev => {
-          const merged = mergeComServidor("entregas", prev, data.entregas);
-          save("pdv_entregas", merged);
-          return merged;
-        });
-        if (Array.isArray(data.fornecedores)) setFornecedores(prev => { const m = mergeComServidor("fornecedores", prev, data.fornecedores); save("pdv_fornecedores", m); return m; });
-        if (Array.isArray(data.categorias) && data.categorias.length) setCats(data.categorias);
-        setServerOk(true);
-        retryTombstones();
-        flushOutbox();
-      } else {
+    const _ultimaSincronia = parseInt(localStorage.getItem("_last_full_sync") || "0", 10);
+    const _dentroDoCooldown = Date.now() - _ultimaSincronia < 300000; // 5 min — get_all_data é uma consulta pesada
+    if (_dentroDoCooldown) {
+      setServerOk(true);
+      setAppReady(true);
+    } else {
+      syncLoad().then(async data => {
+        if (data) {
+          const tomb = getTombstones();
+          const tset = col => new Set(tomb[col] || []);
+          if (Array.isArray(data.products)) setProducts(prev => { const m = mergeComServidor("products", prev, data.products); save("pdv_products", m); return m; });
+          if (Array.isArray(data.customers)) setCustomers(prev => { const m = mergeComServidor("customers", prev, data.customers); save("pdv_customers", m); return m; });
+          if (Array.isArray(data.sales)) setSales(prev => {
+            const merged = mergeComServidor("sales", prev, data.sales);
+            save("pdv_sales", merged);
+            return merged;
+          });
+          if (Array.isArray(data.entregas)) setPedidos(prev => {
+            const merged = mergeComServidor("entregas", prev, data.entregas);
+            save("pdv_entregas", merged);
+            return merged;
+          });
+          if (Array.isArray(data.fornecedores)) setFornecedores(prev => { const m = mergeComServidor("fornecedores", prev, data.fornecedores); save("pdv_fornecedores", m); return m; });
+          if (Array.isArray(data.categorias) && data.categorias.length) setCats(data.categorias);
+          setServerOk(true);
+          localStorage.setItem("_last_full_sync", String(Date.now()));
+          retryTombstones();
+          flushOutbox();
+        } else {
+          setServerOk(false);
+        }
+        const sbUsers = await loadUsersFromSupabase();
+        if (sbUsers && sbUsers.length > 0) setUsers(sbUsers);
+        setAppReady(true);
+      }).catch(() => {
         setServerOk(false);
-      }
-      const sbUsers = await loadUsersFromSupabase();
-      if (sbUsers && sbUsers.length > 0) setUsers(sbUsers);
-      setAppReady(true);
-    }).catch(() => {
-      setServerOk(false);
-      setAppReady(true);
-    });
+        setAppReady(true);
+      });
+    }
   }
   // Recarrega dados manualmente (botão Atualizar)
   const reloadFromSupabase = async function () {
@@ -11771,6 +12381,7 @@ function PDVApp() {
         if (Array.isArray(data.fornecedores)) setFornecedores(prev => { const m = mergeComServidor("fornecedores", prev, data.fornecedores); save("pdv_fornecedores", m); return m; });
         if (Array.isArray(data.categorias) && data.categorias.length) setCats(data.categorias);
         setServerOk(true);
+        localStorage.setItem("_last_full_sync", String(Date.now()));
         retryTombstones();
         flushOutbox();
         if (showNotify) notify('Dados atualizados! ✓');
@@ -12036,17 +12647,17 @@ function PDVApp() {
     const mes = meses[dt.getMonth()];
     const ano = dt.getFullYear();
     const ext = numExtenso(total);
-    return ["<div style='font-family:Arial,sans-serif;max-width:620px;margin:32px auto;border:2px solid #2D3A8C;border-radius:4px;padding:0;page-break-before:always'>",
+    return ["<div style='font-family:Arial,sans-serif;width:100%;margin:14px 0 0;border:1.5px solid #2D3A8C;border-radius:4px;padding:0'>",
     // Cabeçalho
-    "<div style='background:#2D3A8C;color:#fff;padding:12px 20px;display:flex;justify-content:space-between;align-items:center'>", "  <div style='display:flex;align-items:center;gap:12px'><img src='" + LOGO_SRC + "' alt='logo' style='height:40px'/>" + "<div><div style='font-size:16px;font-weight:900;letter-spacing:2px'>NOTA PROMISSÓRIA</div>" + "<div style='font-size:10px;opacity:.8'>VENDAS PECUARÃO - Depósito & Agropecuária</div></div></div>", "  <div style='text-align:right;font-size:11px'>Nº: " + (numRef || "_______") + "<br>Emissão: " + new Date().toLocaleDateString("pt-BR") + "</div>", "</div>",
+    "<div style='background:#2D3A8C;color:#fff;padding:6px 12px;display:flex;justify-content:space-between;align-items:center'>", "  <div style='display:flex;align-items:center;gap:8px'><img src='" + LOGO_SRC + "' alt='logo' style='height:22px'/>" + "<div><div style='font-size:12px;font-weight:900;letter-spacing:1px'>NOTA PROMISSÓRIA</div>" + "<div style='font-size:8px;opacity:.8'>VENDAS PECUARÃO - Depósito & Agropecuária</div></div></div>", "  <div style='text-align:right;font-size:9px'>Nº: " + (numRef || "_______") + "<br>Emissão: " + new Date().toLocaleDateString("pt-BR") + "</div>", "</div>",
     // Valor e vencimento
-    "<div style='display:grid;grid-template-columns:1fr 1fr;gap:0;border-bottom:1px solid #ddd'>", "  <div style='padding:14px 20px;border-right:1px solid #ddd'>", "    <div style='font-size:10px;color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px'>Valor</div>", "    <div style='font-size:22px;font-weight:900;color:#c0392b'>" + fmt(total) + "</div>", "  </div>", "  <div style='padding:14px 20px'>", "    <div style='font-size:10px;color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px'>Vencimento</div>", "    <div style='font-size:16px;font-weight:700'>_____ / _____ / __________</div>", "  </div>", "</div>",
+    "<div style='display:grid;grid-template-columns:1fr 1fr;gap:0;border-bottom:1px solid #ddd'>", "  <div style='padding:6px 12px;border-right:1px solid #ddd'>", "    <div style='font-size:8px;color:#888;text-transform:uppercase;letter-spacing:.5px'>Valor</div>", "    <div style='font-size:16px;font-weight:900;color:#c0392b'>" + fmt(total) + "</div>", "  </div>", "  <div style='padding:6px 12px'>", "    <div style='font-size:8px;color:#888;text-transform:uppercase;letter-spacing:.5px'>Vencimento</div>", "    <div style='font-size:13px;font-weight:700'>_____ / _____ / __________</div>", "  </div>", "</div>",
     // Texto legal
-    "<div style='padding:18px 20px;font-size:13px;line-height:2;border-bottom:1px solid #ddd'>", "  Aos <u>&nbsp;&nbsp;<b>" + dia + "</b>&nbsp;&nbsp;</u> dias do mês de <u>&nbsp;&nbsp;<b>" + mes + "</b>&nbsp;&nbsp;</u> de <u>&nbsp;&nbsp;<b>" + ano + "</b>&nbsp;&nbsp;</u>,", "  pagarei por esta única via de <strong>NOTA PROMISSÓRIA</strong> a", "  <u><b> PECUARÃO GONTIJO - DEPÓSITO & AGROPECUÁRIA </b></u>, inscrito sob CNPJ <b>41.192.464/0001-81</b>, ou à sua ordem,", "  a quantia de:<br>", "  <div style='border:1px dashed #999;border-radius:4px;padding:8px 12px;margin:8px 0;font-style:italic;color:#333;background:#fafafa'><b>" + ext.charAt(0).toUpperCase() + ext.slice(1) + "</b></div>", "  em moeda corrente nacional, com vencimento em _____ / _____ / __________, no endereço:<br>", "  <b>Rua Guarani, 461 - Jardim Candidés - Divinópolis/MG | Tel: (37) 99922-1020</b>", "</div>",
+    "<div style='padding:8px 12px;font-size:10.5px;line-height:1.5;border-bottom:1px solid #ddd'>", "  Aos <u>&nbsp;<b>" + dia + "</b>&nbsp;</u> dias do mês de <u>&nbsp;<b>" + mes + "</b>&nbsp;</u> de <u>&nbsp;<b>" + ano + "</b>&nbsp;</u>,", "  pagarei por esta única via de <strong>NOTA PROMISSÓRIA</strong> a", "  <u><b> PECUARÃO GONTIJO - DEPÓSITO & AGROPECUÁRIA </b></u>, inscrito sob CNPJ <b>41.192.464/0001-81</b>, ou à sua ordem,", "  a quantia de:", "  <div style='border:1px dashed #999;border-radius:4px;padding:4px 8px;margin:4px 0;font-style:italic;color:#333;background:#fafafa'><b>" + ext.charAt(0).toUpperCase() + ext.slice(1) + "</b></div>", "  em moeda corrente nacional, com vencimento em _____ / _____ / __________, no endereço:<br>", "  <b>Rua Guarani, 461 - Jardim Candidés - Divinópolis/MG | Tel: (37) 99922-1020</b>", "</div>",
     // Devedor
-    "<div style='padding:14px 20px;border-bottom:1px solid #ddd;font-size:12px'>", "  <b>Devedor:</b> " + (nome || "_".repeat(40)) + (cpf ? " &nbsp;|&nbsp; <b>CPF/CNPJ:</b> " + cpf : "") + (telefone ? " &nbsp;|&nbsp; <b>Tel:</b> " + telefone : "") + "<br>", "  <b>Endereço:</b> " + (endereco || "_".repeat(60)), "</div>",
+    "<div style='padding:6px 12px;border-bottom:1px solid #ddd;font-size:10px'>", "  <b>Devedor:</b> " + (nome || "_".repeat(40)) + (cpf ? " &nbsp;|&nbsp; <b>CPF/CNPJ:</b> " + cpf : "") + (telefone ? " &nbsp;|&nbsp; <b>Tel:</b> " + telefone : "") + "<br>", "  <b>Endereço:</b> " + (endereco || "_".repeat(60)), "</div>",
     // Assinaturas
-    "<div style='display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:24px 20px'>", "  <div>", "    <div style='border-top:2px solid #333;padding-top:8px;text-align:center;font-size:11px'>", "      Assinatura do Devedor<br><span style='color:#888;font-size:10px'>" + (nome || "") + "</span>", "    </div>", "  </div>", "  <div>", "    <div style='border-top:2px solid #333;padding-top:8px;text-align:center;font-size:11px'>", "      Assinatura do Credor<br><span style='color:#888;font-size:10px'>VENDAS PECUARÃO</span>", "    </div>", "  </div>", "</div>", "<div style='background:#f8f8f8;border-top:1px solid #ddd;padding:8px 20px;font-size:9px;color:#aaa;text-align:center'>", "Este título é regido pela Lei nº 7.357/85 e legislação cambial vigente.", "</div>", "</div>"].join("");
+    "<div style='display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:12px'>", "  <div>", "    <div style='border-top:1.5px solid #333;padding-top:4px;text-align:center;font-size:9px'>", "      Assinatura do Devedor<br><span style='color:#888;font-size:8px'>" + (nome || "") + "</span>", "    </div>", "  </div>", "  <div>", "    <div style='border-top:1.5px solid #333;padding-top:4px;text-align:center;font-size:9px'>", "      Assinatura do Credor<br><span style='color:#888;font-size:8px'>VENDAS PECUARÃO</span>", "    </div>", "  </div>", "</div>", "<div style='background:#f8f8f8;border-top:1px solid #ddd;padding:4px 12px;font-size:7.5px;color:#aaa;text-align:center'>", "Este título é regido pela Lei nº 7.357/85 e legislação cambial vigente.", "</div>", "</div>"].join("");
   };
   const htmlRecibo = (s, cliente) => {
     const isPrazo = s.payment === "A Prazo";
@@ -12119,7 +12730,7 @@ function PDVApp() {
           fontSize: 9
         }
       });
-      d.save("pdv-vendas.pdf");
+      savePdfDoc(d, "pdv-vendas.pdf");
       notify("PDF exportado! ✓");
     } catch {
       notify("Erro ao gerar PDF.", "error");
@@ -12242,7 +12853,7 @@ function PDVApp() {
           y += cardH + gap;
         }
       }
-      d.save("catalogo-atacado-" + todayStr() + ".pdf");
+      savePdfDoc(d, "catalogo-atacado-" + todayStr() + ".pdf");
       notify("Catálogo PDF gerado! ✓ (" + itensCatalogo.length + " produtos)");
     } catch (e) {
       console.warn("[PDV] catálogo PDF falhou:", e);
@@ -12648,7 +13259,8 @@ function PDVApp() {
       display: "flex",
       flexDirection: "column",
       padding: "24px 0",
-      flexShrink: 0
+      flexShrink: 0,
+      overflowY: "auto"
     } : {
       position: "fixed",
       inset: 0,
@@ -12673,7 +13285,8 @@ function PDVApp() {
       display: "flex",
       flexDirection: "column",
       padding: "24px 0",
-      zIndex: 1
+      zIndex: 1,
+      overflowY: "auto"
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -13129,7 +13742,7 @@ function PDVApp() {
       });
       const updated = await applyPhotoCache(products);
       persistP(updated);
-      const comBase64 = updated.filter(p => p.photo && p.photo.startsWith('data:image')).length;
+      const comBase64 = updated.filter(p => p.photo && p.photo.startsWith('data:')).length;
       if (comBase64 === 0) {
         notify('Nenhuma foto antiga para migrar ✓');
         return;
@@ -13896,7 +14509,8 @@ function PDVApp() {
     fornecedores: fornecedores,
     products: products,
     users: users,
-    notify: notify
+    notify: notify,
+    persistS: persistS
   }), page === "lista" && /*#__PURE__*/React.createElement(ListaComprasPage, {
     S: S,
     notify: notify,
@@ -13907,7 +14521,9 @@ function PDVApp() {
     S: S,
     products: products,
     persistP: persistP,
-    notify: notify
+    notify: notify,
+    fornecedores: fornecedores,
+    persistForn: persistForn
   }), page === "estoque" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
