@@ -567,7 +567,8 @@ const migratePhotosToStorage = async (products, onProgress) => {
   };
   const toMigrate = products.filter(p => p.photo && p.photo.startsWith('data:'));
   let migrated = 0,
-    failed = 0;
+    failed = 0,
+    lastError = '';
   const updated = [...products];
   for (let i = 0; i < toMigrate.length; i++) {
     const p = toMigrate[i];
@@ -594,8 +595,15 @@ const migratePhotosToStorage = async (products, onProgress) => {
           photo: url
         };
         migrated++;
-      } else failed++;
-    } catch (_) {
+      } else {
+        const errBody = await r.text().catch(() => '');
+        lastError = `HTTP ${r.status}: ${errBody}`.slice(0, 300);
+        console.error('Falha ao migrar foto', p.id, lastError);
+        failed++;
+      }
+    } catch (e) {
+      lastError = String((e && e.message) || e).slice(0, 300);
+      console.error('Falha ao migrar foto', p.id, lastError);
       failed++;
     }
     if (onProgress) onProgress(i + 1, toMigrate.length);
@@ -603,6 +611,7 @@ const migratePhotosToStorage = async (products, onProgress) => {
   return {
     migrated,
     failed,
+    lastError,
     products: updated
   };
 };
@@ -13754,6 +13763,10 @@ function PDVApp() {
       });
       if (result.products) persistP(result.products);
       notify(`✓ ${result.migrated} migrada(s)${result.failed ? ', ' + result.failed + ' falha(s)' : ''}`);
+      if (result.failed > 0 && result.lastError) {
+        console.error('Motivo das falhas na migração de fotos:', result.lastError);
+        setTimeout(() => notify('Erro: ' + result.lastError, 'error'), 400);
+      }
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
