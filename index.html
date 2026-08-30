@@ -13772,7 +13772,20 @@ function PDVApp() {
       fontSize: 12,
       color: "var(--text-secondary)"
     }
-  }, "Baixa e move fotos antigas para o Storage")), /*#__PURE__*/React.createElement(Icon, {
+  }, "Baixa e move fotos antigas para o Storage"), (() => {
+    const comBase64Agora = (products || []).filter(p => p.photo && p.photo.startsWith("data:"));
+    if (comBase64Agora.length === 0) return null;
+    const bytesAprox = comBase64Agora.reduce((s, p) => s + (p.photo ? p.photo.length : 0), 0) * 0.75;
+    const tamanhoLabel = bytesAprox > 1024 * 1024 ? (bytesAprox / (1024 * 1024)).toFixed(1) + " MB" : Math.round(bytesAprox / 1024) + " KB";
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        ...S.badge("#f59e0b"),
+        fontSize: 11,
+        marginTop: 6,
+        display: "inline-block"
+      }
+    }, "\u26A0\uFE0F " + comBase64Agora.length + " foto(s) pesada(s) no banco \u00B7 ~" + tamanhoLabel);
+  })()), /*#__PURE__*/React.createElement(Icon, {
     name: "import",
     size: 15,
     color: "#4A5BC4"
