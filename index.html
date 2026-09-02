@@ -4480,9 +4480,10 @@ function CartDrawer(_ref18) {
     cartTotal = _ref18.cartTotal,
     onFinalize = _ref18.onFinalize,
     onFinalizeEntrega = _ref18.onFinalizeEntrega,
+    onCadastrarCliente = _ref18.onCadastrarCliente,
     onClose = _ref18.onClose,
     onUpdateProduct = _ref18.onUpdateProduct;
-  const _useState43 = useState(true),
+  const _useState43 = useState(false),
     _useState44 = _slicedToArray(_useState43, 2),
     isEntrega = _useState44[0],
     setIsEntrega = _useState44[1];
@@ -4490,6 +4491,10 @@ function CartDrawer(_ref18) {
     _useState46 = _slicedToArray(_useState45, 2),
     avNome = _useState46[0],
     setAvNome = _useState46[1];
+  const _useStateAvTel = useState(""),
+    _useStateAvTel2 = _slicedToArray(_useStateAvTel, 2),
+    avTelefone = _useStateAvTel2[0],
+    setAvTelefone = _useStateAvTel2[1];
   const _useState47 = useState(""),
     _useState48 = _slicedToArray(_useState47, 2),
     avRua = _useState48[0],
@@ -4558,6 +4563,10 @@ function CartDrawer(_ref18) {
     _useStateAPC2 = _slicedToArray(_useStateAPC, 2),
     atualizarPrecoCadastro = _useStateAPC2[0],
     setAtualizarPrecoCadastro = _useStateAPC2[1];
+  const _useStateCliCad = useState(false),
+    _useStateCliCad2 = _slicedToArray(_useStateCliCad, 2),
+    clienteAvulsoCadastrado = _useStateCliCad2[0],
+    setClienteAvulsoCadastrado = _useStateCliCad2[1];
   const isAvulso = saleCustomer === "Avulso";
   const cliObj = customers.find(c => c.name === saleCustomer);
   const endFmt = cliObj ? [cliObj.rua && cliObj.rua + (cliObj.numero ? ", " + cliObj.numero : ""), cliObj.bairro, cliObj.cidade && cliObj.cidade + (cliObj.uf ? " - " + cliObj.uf : ""), cliObj.cep && "CEP: " + cliObj.cep].filter(Boolean).join(" · ") : "";
@@ -4612,7 +4621,19 @@ function CartDrawer(_ref18) {
       if (avBairro) parts.push(avBairro);
       if (avCidade) parts.push(avCidade);
     }
-    onFinalizeEntrega(isAvulso ? parts.join(" · ") : endFmt, isAvulso ? avNome.trim() : saleCustomer, avObs.trim());
+    onFinalizeEntrega(isAvulso ? parts.join(" · ") : endFmt, isAvulso ? avNome.trim() : saleCustomer, avObs.trim(), isAvulso ? avTelefone.trim() : "");
+  };
+  const handleCadastrarCliente = () => {
+    if (!avNome.trim() || !onCadastrarCliente) return;
+    onCadastrarCliente({
+      name: avNome.trim(),
+      phone: avTelefone.trim(),
+      rua: avRua.trim(),
+      numero: avNum.trim(),
+      bairro: avBairro.trim(),
+      cidade: avCidade.trim()
+    });
+    setClienteAvulsoCadastrado(true);
   };
   const getProd = item => products ? products.find(p => p.id === item.id) : null;
   return /*#__PURE__*/React.createElement(Sheet, {
@@ -5076,6 +5097,21 @@ function CartDrawer(_ref18) {
     onChange: e => setAvNome(e.target.value)
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.lbl,
+      marginBottom: 5
+    }
+  }, "Telefone"), /*#__PURE__*/React.createElement("input", {
+    type: "tel",
+    style: S.input,
+    placeholder: "(37) 99999-9999",
+    value: avTelefone,
+    onChange: e => setAvTelefone(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
       display: "grid",
       gridTemplateColumns: "1fr 80px",
       gap: 8,
@@ -5128,7 +5164,21 @@ function CartDrawer(_ref18) {
     placeholder: "Divin\xF3polis",
     value: avCidade,
     onChange: e => setAvCidade(e.target.value)
-  }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }))), onCadastrarCliente && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    disabled: !avNome.trim() || clienteAvulsoCadastrado,
+    onClick: handleCadastrarCliente,
+    style: {
+      ...S.btn("ghost"),
+      width: "100%",
+      justifyContent: "center",
+      padding: "10px",
+      fontSize: 13,
+      marginBottom: 10,
+      opacity: !avNome.trim() || clienteAvulsoCadastrado ? .5 : 1,
+      cursor: !avNome.trim() || clienteAvulsoCadastrado ? "not-allowed" : "pointer"
+    }
+  }, clienteAvulsoCadastrado ? "✓ Cliente cadastrado" : "➕ Cadastrar este cliente"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.lbl,
       marginBottom: 5
@@ -12481,6 +12531,38 @@ function PDVApp() {
     setEditCust(null);
     setCustSheet(false);
   };
+  // Cadastra um cliente avulso a partir do formulário de entrega (dentro do carrinho),
+  // sem depender do estado editCust/custSheet usados pela tela de Clientes.
+  const cadastrarClienteAvulso = form => {
+    if (!form.name) {
+      notify("Informe o nome!", "error");
+      return;
+    }
+    const jaExiste = customers.some(c => c.name.trim().toLowerCase() === form.name.trim().toLowerCase());
+    if (jaExiste) {
+      notify("Já existe um cliente cadastrado com esse nome!", "warn");
+      return;
+    }
+    persistC([{
+      id: uid(),
+      name: form.name,
+      email: "",
+      phone: form.phone || "",
+      cpf: "",
+      rua: form.rua || "",
+      numero: form.numero || "",
+      complemento: "",
+      bairro: form.bairro || "",
+      cidade: form.cidade || "",
+      uf: "",
+      cep: "",
+      purchases: 0,
+      totalSpent: 0,
+      lastVisit: todayStr(),
+      createdAt: Date.now()
+    }, ...customers]);
+    notify("Cliente \"" + form.name + "\" cadastrado! ✓");
+  };
   const updateProduct = (prodId, changes) => persistP(products.map(p => p.id === prodId ? {
     ...p,
     ...changes
@@ -12532,6 +12614,7 @@ function PDVApp() {
     let enderecoEntrega = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : "";
     let nomeEntrega = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : "";
     let obsEntrega = arguments.length > 3 && arguments[3] !== undefined ? arguments[3] : "";
+    let telefoneEntrega = arguments.length > 4 && arguments[4] !== undefined ? arguments[4] : "";
     if (cart.length === 0) {
       notify("Carrinho vazio!", "error");
       return;
@@ -12591,7 +12674,7 @@ function PDVApp() {
         id: uid(),
         numero: "PED-" + String(peds.length + 1).padStart(4, "0"),
         cliente: nomeEntrega || saleCustomer,
-        telefone: (cliObj === null || cliObj === void 0 ? void 0 : cliObj.phone) || "",
+        telefone: telefoneEntrega || ((cliObj === null || cliObj === void 0 ? void 0 : cliObj.phone) || ""),
         endereco: enderecoEntrega || "",
         itens: cart.map(i => ({
           name: i.name,
@@ -12615,7 +12698,7 @@ function PDVApp() {
     setCartOpen(false);
   };
   const finalizeSale = () => doFinalizeSale(false);
-  const finalizeSaleComEntrega = (endereco, nome, obs) => doFinalizeSale(true, endereco, nome, obs);
+  const finalizeSaleComEntrega = (endereco, nome, obs, telefone) => doFinalizeSale(true, endereco, nome, obs, telefone);
 
   // Gera HTML do recibo de venda
 
@@ -15744,6 +15827,7 @@ function PDVApp() {
     cartTotal: cartTotal,
     onFinalize: finalizeSale,
     onFinalizeEntrega: finalizeSaleComEntrega,
+    onCadastrarCliente: cadastrarClienteAvulso,
     onClose: () => setCartOpen(false)
   }), deleteTarget && /*#__PURE__*/React.createElement(DeleteSheet, {
     S: S,
