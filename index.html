@@ -558,35 +558,6 @@ const applyPhotoCache = async products => {
   }));
 };
 
-// Converte um data URL (base64) em um Blob JPEG comprimido, igual ao upload normal de foto
-const _compressBase64ToJpeg = (dataUrl, maxDim = 800, quality = 0.75) => {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      let w = img.width,
-        h = img.height;
-      if (w > maxDim) {
-        h = Math.round(h * maxDim / w);
-        w = maxDim;
-      }
-      if (h > maxDim) {
-        w = Math.round(w * maxDim / h);
-        h = maxDim;
-      }
-      const canvas = document.createElement('canvas');
-      canvas.width = w || 1;
-      canvas.height = h || 1;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, w, h);
-      canvas.toBlob(blob => {
-        if (blob) resolve(blob);else reject(new Error('Falha ao gerar blob da imagem'));
-      }, 'image/jpeg', quality);
-    };
-    img.onerror = () => reject(new Error('Imagem base64 inválida/corrompida'));
-    img.src = dataUrl;
-  });
-};
-
 // Migra fotos base64 antigas para o Supabase Storage
 const migratePhotosToStorage = async (products, onProgress) => {
   const key = _SB_KEY();
@@ -602,9 +573,9 @@ const migratePhotosToStorage = async (products, onProgress) => {
   for (let i = 0; i < toMigrate.length; i++) {
     const p = toMigrate[i];
     try {
-      // Comprime o base64 antigo (imagens antigas costumam ser grandes/sem compressão,
-      // o que causava erro 400 no Storage) e converte para Blob JPEG real
-      const blob = await _compressBase64ToJpeg(p.photo);
+      // Converte base64 para Blob
+      const res = await fetch(p.photo);
+      const blob = await res.blob();
       const filename = `migrado_${p.id}_${Date.now()}.jpg`;
       const r = await fetch(`${SUPABASE_URL}/storage/v1/object/fotos/${filename}`, {
         method: 'POST',
@@ -7125,8 +7096,8 @@ function ListaComprasPage(_ref20) {
     }
   }, totalOk, "/", items.length, " recebidos"), totalOk > 0 && /*#__PURE__*/React.createElement("button", {
     onClick: () => {
-      persist(items.filter(i => i.fase !== "recebido"));
-      notify("Recebidos removidos.", "warn");
+      persist(items.filter(i => i.fase !== "recebido" && i.fase !== "comprado"));
+      notify("Recebidos e comprados removidos.", "warn");
     },
     style: {
       ...S.btn("danger"),
@@ -12354,19 +12325,18 @@ function PDVApp() {
   // janela de 5min, usa os dados já salvos no aparelho e libera a tela na
   // hora — sem esperar o servidor. O botão "Atualizar" (reloadFromSupabase)
   // continua batendo no servidor na hora, sem respeitar esse cooldown.
-  if (!_syncRef.current && keyReady) {
-    _syncRef.current = true;
-    const _ultimaSincronia = parseInt(localStorage.getItem("_last_full_sync") || "0", 10);
-    const _dentroDoCooldown = Date.now() - _ultimaSincronia < 300000; // 5 min — get_all_data é uma consulta pesada
-    if (_dentroDoCooldown) {
-      setServerOk(true);
-      setAppReady(true);
-    } else {
-      syncLoad().then(async data => {
-        if (data) {
-          const tomb = getTombstones();
-          const tset = col => new Set(tomb[col] || []);
-          if (Array.isArray(data.products)) setProducts(prev => { const m = mergeComServidor("products", prev, data.products); save("pdv_products", m); return m; });
+  useEffect(() => {
+    if (!_syncRef.current && keyReady) {
+      _syncRef.current = true;
+      const _ultimaSincronia = parseInt(localStorage.getItem("_last_full_sync") || "0", 10);
+      const _dentroDoCooldown = Date.now() - _ultimaSincronia < 300000; // 5 min — get_all_data é uma consulta pesada
+      if (_dentroDoCooldown) {
+        setServerOk(true);
+        setAppReady(true);
+      } else {
+        syncLoad().then(async data => {
+          if (data) {
+            if (Array.isArray(data.products)) setProducts(prev => { const m = mergeComServidor("products", prev, data.products); save("pdv_products", m); return m; });
           if (Array.isArray(data.customers)) setCustomers(prev => { const m = mergeComServidor("customers", prev, data.customers); save("pdv_customers", m); return m; });
           if (Array.isArray(data.sales)) setSales(prev => {
             const merged = mergeComServidor("sales", prev, data.sales);
@@ -12390,20 +12360,19 @@ function PDVApp() {
         const sbUsers = await loadUsersFromSupabase();
         if (sbUsers && sbUsers.length > 0) setUsers(sbUsers);
         setAppReady(true);
-      }).catch(() => {
-        setServerOk(false);
-        setAppReady(true);
-      });
+        }).catch(() => {
+          setServerOk(false);
+          setAppReady(true);
+        });
+      }
     }
-  }
+  }, [keyReady]);
   // Recarrega dados manualmente (botão Atualizar)
   const reloadFromSupabase = async function () {
     let showNotify = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : true;
     try {
       const data = await syncLoad();
       if (data) {
-        const tomb = getTombstones();
-        const tset = col => new Set(tomb[col] || []);
         if (Array.isArray(data.products)) setProducts(prev => { const m = mergeComServidor("products", prev, data.products); save("pdv_products", m); return m; });
         if (Array.isArray(data.customers)) setCustomers(prev => { const m = mergeComServidor("customers", prev, data.customers); save("pdv_customers", m); return m; });
         if (Array.isArray(data.sales)) setSales(prev => {
