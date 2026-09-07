@@ -178,6 +178,49 @@ const savePdfDoc = (d, fileName) => {
   d.save(fileName);
 };
 
+const carregarJsPDF = async () => {
+  for (const src of ["https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"]) {
+    if (!document.querySelector('script[src="' + src + '"]')) {
+      await new Promise((res, rej) => {
+        const s = document.createElement("script");
+        s.src = src;
+        s.onload = res;
+        s.onerror = rej;
+        document.head.appendChild(s);
+      });
+    }
+  }
+  return window.jspdf.jsPDF;
+};
+
+// ─── Envio direto para o app Thermer (impressora térmica Bluetooth) ────────
+// O Thermer (pacote mate.bluetoothprint) aceita receber PDFs compartilhados
+// por outros apps via Android Share e imprime na impressora Bluetooth já
+// pareada nele. Isso evita reimplementar toda a comunicação Bluetooth/ESC-POS
+// aqui dentro — o Thermer cuida disso.
+const enviarParaThermer = async (doc, fileName) => {
+  if (!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())) {
+    notify("O envio direto para o Thermer só funciona dentro do app Android.", "warn");
+    return;
+  }
+  try {
+    const ThermerPrint = window.Capacitor.Plugins && window.Capacitor.Plugins.PdfPlugin;
+    if (!ThermerPrint || !ThermerPrint.compartilharThermer) {
+      notify("Este APK ainda não tem a integração com o Thermer instalada.", "error");
+      return;
+    }
+    const base64 = doc.output("datauristring");
+    await ThermerPrint.compartilharThermer({ base64, fileName });
+  } catch (err) {
+    console.error("Erro ao enviar para o Thermer:", err);
+    if (err && String(err.message || err).includes("não está instalado")) {
+      notify("O app Thermer não está instalado neste aparelho. Instale-o na Play Store para usar esta opção.", "error");
+    } else {
+      notify("Não foi possível enviar para o Thermer. Detalhe: " + (err && err.message ? err.message : err), "error");
+    }
+  }
+};
+
 const printHTMLDoc = (html, jobName, modo, larguraMm, alturaMm) => {
   // Dentro do app Android/iOS (Capacitor), window.print() não existe no WebView.
   // Usa o plugin nativo (PrintPlugin) que abre a caixa de diálogo de impressão do sistema.
@@ -9367,6 +9410,90 @@ function EntregasPage(_ref24) {
     }
     printHTMLDoc(html, ped.numero || "Pedido", modo, modo === "80mm" ? 80 : modo === "110mm" ? 110 : null);
   };
+
+  // Monta o pedido de entrega como PDF de 80mm, pra compartilhar com o Thermer.
+  const construirPdfPedido80mm = async ped => {
+    const st = ST[ped.status];
+    const pgStatus = ped.pagamento || "";
+    const pgLabel = pgStatus === "pago" ? "PAGO" : pgStatus === "troco" ? "LEVAR TROCO" : pgStatus === "maquina" ? "LEVAR M\xC1QUINA" : pgStatus === "troco_maquina" ? "LEVAR TROCO + M\xC1QUINA" : "";
+    const jsPDF = await carregarJsPDF();
+    const larguraMm = 80;
+    const margemX = 4;
+    const larguraUtil = larguraMm - margemX * 2;
+    const centro = larguraMm / 2;
+    const doc = new jsPDF({ unit: "mm", format: [larguraMm, 297] });
+    let y = 10;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(12);
+    doc.text("PEDIDO DE ENTREGA", centro, y, { align: "center" });
+    y += 6;
+    doc.setFontSize(10);
+    doc.text(ped.numero + " - " + ped.criadoData + " " + ped.criadoHora, centro, y, { align: "center" });
+    y += 5;
+    doc.setLineDashPattern([1, 1], 0);
+    doc.line(margemX, y, larguraMm - margemX, y);
+    doc.setLineDashPattern([], 0);
+    y += 6;
+    doc.setFontSize(12);
+    const linha = txt => {
+      const partes = doc.splitTextToSize(txt, larguraUtil);
+      doc.text(partes, margemX, y);
+      y += 5.5 * partes.length;
+    };
+    linha("Status: " + st.label);
+    linha("Cliente: " + ped.cliente);
+    if (ped.telefone) linha("Tel: " + ped.telefone);
+    if (ped.endereco) linha("End: " + ped.endereco);
+    y += 1;
+    doc.setLineDashPattern([1, 1], 0);
+    doc.line(margemX, y, larguraMm - margemX, y);
+    doc.setLineDashPattern([], 0);
+    y += 6;
+    (ped.itens || []).forEach(i => {
+      const nomeLinhas = doc.splitTextToSize(i.qty + "x " + i.name, larguraUtil - 22);
+      doc.text(nomeLinhas, margemX, y);
+      doc.text(fmt(i.price * i.qty), larguraMm - margemX, y, { align: "right" });
+      y += 5.5 * nomeLinhas.length;
+    });
+    y += 1;
+    doc.setLineDashPattern([1, 1], 0);
+    doc.line(margemX, y, larguraMm - margemX, y);
+    doc.setLineDashPattern([], 0);
+    y += 7;
+    doc.setFontSize(13);
+    doc.text("TOTAL", margemX, y);
+    doc.text(fmt(ped.total), larguraMm - margemX, y, { align: "right" });
+    y += 8;
+    doc.setFontSize(12);
+    if (pgLabel) {
+      doc.rect(margemX, y - 4.5, larguraUtil, 7);
+      doc.text(pgLabel, centro, y, { align: "center" });
+      y += 9;
+    }
+    if (ped.obs) {
+      linha("Obs: " + ped.obs);
+      y += 1;
+    }
+    y += 3;
+    doc.setLineDashPattern([1, 1], 0);
+    doc.line(margemX, y, larguraMm - margemX, y);
+    doc.setLineDashPattern([], 0);
+    y += 10;
+    doc.text("Assinatura: ______________________", centro, y, { align: "center" });
+    return doc;
+  };
+
+  const imprimirPedidoThermer = async ped => {
+    notify("Preparando pedido para o Thermer...", "info");
+    try {
+      const doc = await construirPdfPedido80mm(ped);
+      await enviarParaThermer(doc, "pedido-" + (ped.numero || "entrega") + ".pdf");
+    } catch (e) {
+      console.error("Erro ao montar PDF do pedido para o Thermer:", e);
+      notify("Erro ao preparar o pedido para o Thermer.", "error");
+    }
+  };
+
   const vendaSelecionada = sales.find(s => s.id === nForm.vendaId);
   const clienteSel = customers.find(c => c.name === ((vendaSelecionada === null || vendaSelecionada === void 0 ? void 0 : vendaSelecionada.customer) || nForm.cliente));
   const enderecoDoCliente = clienteSel ? [clienteSel.rua && clienteSel.rua + (clienteSel.numero ? ", " + clienteSel.numero : ""), clienteSel.bairro, clienteSel.cidade && clienteSel.cidade + (clienteSel.uf ? " - " + clienteSel.uf : ""), clienteSel.cep && "CEP: " + clienteSel.cep].filter(Boolean).join(" · ") : "";
@@ -9777,13 +9904,17 @@ function EntregasPage(_ref24) {
         overflow: "hidden",
         zIndex: 20
       }
-    }, [["80mm", "\uD83E\uDDFE T\xE9rmica 80mm"], ["110mm", "\uD83E\uDDFE T\xE9rmica 110mm (Elgin L42 Pro)"], ["a4", "\uD83D\uDCC4 Folha A4"]].map(_ref2c => {
+    }, [["80mm", "\uD83E\uDDFE T\xE9rmica 80mm"], ["110mm", "\uD83E\uDDFE T\xE9rmica 110mm (Elgin L42 Pro)"], ["a4", "\uD83D\uDCC4 Folha A4"], ["thermer", "\uD83D\uDD35 Enviar para Thermer"]].map(_ref2c => {
       let val = _ref2c[0],
         label = _ref2c[1];
       return /*#__PURE__*/React.createElement("button", {
         key: val,
         onClick: () => {
-          imprimirBrowser(ped, val);
+          if (val === "thermer") {
+            imprimirPedidoThermer(ped);
+          } else {
+            imprimirBrowser(ped, val);
+          }
           setPrintMenuId(null);
         },
         style: {
@@ -12898,6 +13029,86 @@ function PDVApp() {
     printHTMLDoc(html, undefined, "80mm", 80);
   };
 
+  // Monta o mesmo conteúdo do recibo, só que como PDF de 80mm (em vez de
+  // HTML), pra poder ser compartilhado com o app Thermer.
+  const construirPdfRecibo80mm = async s => {
+    const cliente = customers.find(c => c.name === s.customer);
+    const jsPDF = await carregarJsPDF();
+    const larguraMm = 80;
+    const margemX = 4;
+    const larguraUtil = larguraMm - margemX * 2;
+    const centro = larguraMm / 2;
+    const doc = new jsPDF({ unit: "mm", format: [larguraMm, 297] });
+    let y = 10;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(12);
+    doc.text("RECIBO DE VENDA", centro, y, { align: "center" });
+    y += 6;
+    doc.setFontSize(10);
+    doc.text(s.date + " " + s.time + " - N\xBA " + s.id.slice(-8).toUpperCase(), centro, y, { align: "center" });
+    y += 5;
+    doc.setLineDashPattern([1, 1], 0);
+    doc.line(margemX, y, larguraMm - margemX, y);
+    doc.setLineDashPattern([], 0);
+    y += 6;
+    doc.setFontSize(12);
+    const linha = txt => {
+      const partes = doc.splitTextToSize(txt, larguraUtil);
+      doc.text(partes, margemX, y);
+      y += 5.5 * partes.length;
+    };
+    linha("Cliente: " + ((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer));
+    if (cliente !== null && cliente !== void 0 && cliente.cpf) linha("CPF/CNPJ: " + cliente.cpf);
+    if (cliente !== null && cliente !== void 0 && cliente.phone) linha("Tel: " + cliente.phone);
+    y += 1;
+    doc.setLineDashPattern([1, 1], 0);
+    doc.line(margemX, y, larguraMm - margemX, y);
+    doc.setLineDashPattern([], 0);
+    y += 6;
+    s.items.forEach(i => {
+      const nomeLinhas = doc.splitTextToSize(i.qty + "x " + i.name, larguraUtil - 22);
+      doc.text(nomeLinhas, margemX, y);
+      doc.text(fmt(i.price * i.qty), larguraMm - margemX, y, { align: "right" });
+      y += 5.5 * nomeLinhas.length;
+    });
+    y += 1;
+    doc.setLineDashPattern([1, 1], 0);
+    doc.line(margemX, y, larguraMm - margemX, y);
+    doc.setLineDashPattern([], 0);
+    y += 7;
+    doc.setFontSize(13);
+    doc.text("TOTAL", margemX, y);
+    doc.text(fmt(s.total), larguraMm - margemX, y, { align: "right" });
+    y += 7;
+    doc.setFontSize(12);
+    linha("Pagamento: " + s.payment);
+    if (s.payment === "A Prazo") {
+      y += 1;
+      doc.rect(margemX, y - 4.5, larguraUtil, 7);
+      doc.text("\u26A0 A PRAZO", centro, y, { align: "center" });
+      y += 7;
+    }
+    y += 3;
+    doc.setLineDashPattern([1, 1], 0);
+    doc.line(margemX, y, larguraMm - margemX, y);
+    doc.setLineDashPattern([], 0);
+    y += 6;
+    doc.setFontSize(11);
+    doc.text("Obrigado pela prefer\xEAncia!", centro, y, { align: "center" });
+    return doc;
+  };
+
+  const imprimirReciboThermer = async s => {
+    notify("Preparando recibo para o Thermer...", "info");
+    try {
+      const doc = await construirPdfRecibo80mm(s);
+      await enviarParaThermer(doc, "recibo-" + s.id.slice(-8) + ".pdf");
+    } catch (e) {
+      console.error("Erro ao montar PDF do recibo para o Thermer:", e);
+      notify("Erro ao preparar o recibo para o Thermer.", "error");
+    }
+  };
+
   const compartilharRecibo = s => {
     const cliente = customers.find(c => c.name === s.customer);
     const isPrazo = s.payment === "A Prazo";
@@ -15515,6 +15726,15 @@ function PDVApp() {
       fontSize: 11
     }
   }, "\uD83D\uDCE4 Enviar"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => imprimirReciboThermer(s),
+    style: {
+      ...S.btn("ghost"),
+      flex: 1,
+      justifyContent: "center",
+      padding: "7px",
+      fontSize: 11
+    }
+  }, "\uD83D\uDD35 Thermer"), /*#__PURE__*/React.createElement("button", {
     onClick: () => {
       setEditSale(s);
       setEditSaleForm({
