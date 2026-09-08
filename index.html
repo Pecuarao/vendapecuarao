@@ -9483,14 +9483,94 @@ function EntregasPage(_ref24) {
     return doc;
   };
 
-  const imprimirPedidoThermer = async ped => {
-    notify("Preparando pedido para o Thermer...", "info");
+  // Monta o pedido de entrega como PDF A4, usando jsPDF + autoTable.
+  const construirPdfPedidoA4 = async ped => {
+    const st = ST[ped.status];
+    const pgStatus = ped.pagamento || "";
+    const pgLabel = pgStatus === "pago" ? "✅ PAGO" : pgStatus === "troco" ? "💵 LEVAR TROCO" : pgStatus === "maquina" ? "📲 LEVAR MÁQUINA" : pgStatus === "troco_maquina" ? "💵📲 LEVAR TROCO + MÁQUINA" : "";
+    for (const src of ["https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js", "https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"]) {
+      if (!document.querySelector('script[src="' + src + '"]')) {
+        await new Promise((res, rej) => {
+          const s = document.createElement("script");
+          s.src = src;
+          s.onload = res;
+          s.onerror = rej;
+          document.head.appendChild(s);
+        });
+      }
+    }
+    const jsPDF = window.jspdf.jsPDF;
+    const d = new jsPDF();
+    let y = 20;
+    d.setFontSize(16);
+    d.setTextColor(45, 58, 140);
+    d.text("PEDIDO DE ENTREGA", 14, y);
+    y += 7;
+    d.setFontSize(10);
+    d.setTextColor(120);
+    d.text((ped.numero || "") + " · " + ped.criadoData + " " + ped.criadoHora, 14, y);
+    y += 8;
+    d.setFontSize(11);
+    d.setTextColor(0);
+    d.text("Status: " + st.emoji + " " + st.label, 14, y);
+    y += 6;
+    d.text("Cliente: " + ped.cliente, 14, y);
+    y += 6;
+    if (ped.telefone) {
+      d.text("Tel: " + ped.telefone, 14, y);
+      y += 6;
+    }
+    if (ped.endereco) {
+      const linhasEnd = d.splitTextToSize("Endereço: " + ped.endereco, 180);
+      d.text(linhasEnd, 14, y);
+      y += 6 * linhasEnd.length;
+    }
+    y += 2;
+    d.autoTable({
+      startY: y,
+      head: [["Produto", "Qtd", "Valor"]],
+      body: (ped.itens || []).map(i => [i.name, i.qty + "x", fmt(i.price * i.qty)]),
+      theme: "striped",
+      headStyles: { fillColor: [45, 58, 140] },
+      styles: { fontSize: 10 },
+      columnStyles: { 1: { halign: "center" }, 2: { halign: "right" } }
+    });
+    y = d.lastAutoTable.finalY + 8;
+    d.setFontSize(13);
+    d.setTextColor(45, 58, 140);
+    d.text("TOTAL: " + fmt(ped.total), 196, y, { align: "right" });
+    y += 10;
+    d.setFontSize(11);
+    if (pgLabel) {
+      d.setTextColor(0);
+      d.rect(14, y - 5, 182, 8);
+      d.text(pgLabel, 105, y, { align: "center" });
+      y += 12;
+    }
+    if (ped.obs) {
+      d.setTextColor(0);
+      const linhasObs = d.splitTextToSize("Obs: " + ped.obs, 182);
+      d.text(linhasObs, 14, y);
+      y += 6 * linhasObs.length + 4;
+    }
+    y += 14;
+    d.setTextColor(80);
+    d.text("Assinatura do recebedor: _______________________________", 14, y);
+    y += 8;
+    d.text("Data: _____ / _____ / _______", 14, y);
+    return d;
+  };
+
+  // Gera o PDF do pedido (80mm ou A4) e salva/baixa no dispositivo.
+  const gerarPdfPedido = async (ped, modo) => {
+    notify("Gerando PDF...", "info");
     try {
-      const doc = await construirPdfPedido80mm(ped);
-      await enviarParaThermer(doc, "pedido-" + (ped.numero || "entrega") + ".pdf");
+      const doc = modo === "80mm" ? await construirPdfPedido80mm(ped) : await construirPdfPedidoA4(ped);
+      savePdfDoc(doc, "pedido-" + (ped.numero || "entrega") + ".pdf");
+      notify("PDF gerado! ✓");
     } catch (e) {
-      console.error("Erro ao montar PDF do pedido para o Thermer:", e);
-      notify("Erro ao preparar o pedido para o Thermer.", "error");
+      console.error("Erro ao gerar PDF do pedido:", e);
+      notify("Erro ao gerar o PDF do pedido.", "error");
     }
   };
 
@@ -9904,17 +9984,13 @@ function EntregasPage(_ref24) {
         overflow: "hidden",
         zIndex: 20
       }
-    }, [["80mm", "\uD83E\uDDFE T\xE9rmica 80mm"], ["110mm", "\uD83E\uDDFE T\xE9rmica 110mm (Elgin L42 Pro)"], ["a4", "\uD83D\uDCC4 Folha A4"], ["thermer", "\uD83D\uDD35 Enviar para Thermer"]].map(_ref2c => {
+    }, [["80mm", "\uD83E\uDDFE T\xE9rmica 80mm"], ["a4", "\uD83D\uDCC4 Folha A4"]].map(_ref2c => {
       let val = _ref2c[0],
         label = _ref2c[1];
       return /*#__PURE__*/React.createElement("button", {
         key: val,
         onClick: () => {
-          if (val === "thermer") {
-            imprimirPedidoThermer(ped);
-          } else {
-            imprimirBrowser(ped, val);
-          }
+          gerarPdfPedido(ped, val);
           setPrintMenuId(null);
         },
         style: {
