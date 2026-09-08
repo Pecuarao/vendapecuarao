@@ -43,6 +43,10 @@ body{background:#FFFFFF;color:var(--text-primary);font-family:'Sora',sans-serif;
   } catch (e) {}
 })();
 </script>
+<!-- Plugins oficiais do Capacitor (Filesystem/Share), carregados localmente para
+     funcionar offline. Substituem o antigo plugin nativo customizado PdfPlugin. -->
+<script src="vendor/capacitor-filesystem.js"></script>
+<script src="vendor/capacitor-share.js"></script>
 </head>
 <body>
 <div id="splash" style="position:fixed;inset:0;z-index:99999;background:#FFFFFF;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .35s ease,visibility .35s ease">
@@ -158,20 +162,30 @@ const enrichComMatches = (prods, produtosExistentes) => prods.map(p => {
 });
 // Imprime um HTML usando iframe oculto — funciona em navegador, Android (WebView)
 // e no app Windows (Electron), onde window.open("", "_blank") costuma ser bloqueado.
-const savePdfDoc = (d, fileName) => {
+const savePdfDoc = async (d, fileName) => {
   if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
     try {
-      const PdfPlugin = window.Capacitor.Plugins && window.Capacitor.Plugins.PdfPlugin;
-      if (PdfPlugin && PdfPlugin.openBase64Pdf) {
-        const base64 = d.output("datauristring");
-        PdfPlugin.openBase64Pdf({ base64, fileName }).catch(err => {
-          console.error("Erro ao abrir PDF (nativo):", err);
-          alert("Não foi possível abrir o PDF. Detalhe: " + (err && err.message ? err.message : err));
-        });
-        return;
-      }
+      const { Filesystem, Directory } = window.Capacitor.Plugins;
+      const { Share } = window.Capacitor.Plugins;
+      // jsPDF gera "data:application/pdf;filename=...;base64,XXXX" — o Filesystem
+      // só quer o base64 puro, sem o prefixo data:...
+      const dataUri = d.output("datauristring");
+      const base64 = dataUri.substring(dataUri.indexOf(",") + 1);
+      const { uri } = await Filesystem.writeFile({
+        path: fileName,
+        data: base64,
+        directory: Directory.Cache
+      });
+      await Share.share({
+        title: fileName,
+        dialogTitle: "Abrir ou compartilhar PDF",
+        files: [uri]
+      });
+      return;
     } catch (e) {
-      console.error("Erro ao chamar PdfPlugin:", e);
+      console.error("Erro ao salvar/abrir PDF (nativo):", e);
+      alert("Não foi possível abrir o PDF. Detalhe: " + (e && e.message ? e.message : e));
+      return;
     }
   }
   // Navegador desktop / Electron: comportamento padrão do jsPDF (baixa o arquivo)
@@ -204,20 +218,25 @@ const enviarParaThermer = async (doc, fileName) => {
     return;
   }
   try {
-    const ThermerPrint = window.Capacitor.Plugins && window.Capacitor.Plugins.PdfPlugin;
-    if (!ThermerPrint || !ThermerPrint.compartilharThermer) {
-      notify("Este APK ainda não tem a integração com o Thermer instalada.", "error");
-      return;
-    }
-    const base64 = doc.output("datauristring");
-    await ThermerPrint.compartilharThermer({ base64, fileName });
+    const { Filesystem, Directory, Share } = window.Capacitor.Plugins;
+    const dataUri = doc.output("datauristring");
+    const base64 = dataUri.substring(dataUri.indexOf(",") + 1);
+    const { uri } = await Filesystem.writeFile({
+      path: fileName,
+      data: base64,
+      directory: Directory.Cache
+    });
+    // Abre o seletor de compartilhamento do Android — escolha "Thermer" na lista.
+    // (Antes um plugin nativo customizado mandava direto pro Thermer; agora é
+    // um toque a mais, mas sem precisar de código nativo customizado.)
+    await Share.share({
+      title: fileName,
+      dialogTitle: "Escolha o Thermer para imprimir",
+      files: [uri]
+    });
   } catch (err) {
     console.error("Erro ao enviar para o Thermer:", err);
-    if (err && String(err.message || err).includes("não está instalado")) {
-      notify("O app Thermer não está instalado neste aparelho. Instale-o na Play Store para usar esta opção.", "error");
-    } else {
-      notify("Não foi possível enviar para o Thermer. Detalhe: " + (err && err.message ? err.message : err), "error");
-    }
+    notify("Não foi possível compartilhar o PDF. Detalhe: " + (err && err.message ? err.message : err), "error");
   }
 };
 
