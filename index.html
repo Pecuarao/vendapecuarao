@@ -158,24 +158,129 @@ const enrichComMatches = (prods, produtosExistentes) => prods.map(p => {
 });
 // Imprime um HTML usando iframe oculto — funciona em navegador, Android (WebView)
 // e no app Windows (Electron), onde window.open("", "_blank") costuma ser bloqueado.
-const savePdfDoc = (d, fileName) => {
+const savePdfDoc = async (d, fileName) => {
   if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
     try {
       const PdfPlugin = window.Capacitor.Plugins && window.Capacitor.Plugins.PdfPlugin;
       if (PdfPlugin && PdfPlugin.openBase64Pdf) {
         const base64 = d.output("datauristring");
-        PdfPlugin.openBase64Pdf({ base64, fileName }).catch(err => {
-          console.error("Erro ao abrir PDF (nativo):", err);
-          alert("Não foi possível abrir o PDF. Detalhe: " + (err && err.message ? err.message : err));
+        await PdfPlugin.openBase64Pdf({ base64, fileName });
+        return;
+      }
+      // Sem plugin nativo customizado: usa os plugins oficiais do Capacitor
+      // (@capacitor/filesystem + @capacitor/share) para salvar o PDF e abrir
+      // o menu "Compartilhar/Abrir com" do Android.
+      const Filesystem = window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem;
+      const Share = window.Capacitor.Plugins && window.Capacitor.Plugins.Share;
+      if (Filesystem) {
+        const base64Puro = d.output("datauristring").split(",")[1];
+        const res = await Filesystem.writeFile({
+          path: fileName,
+          data: base64Puro,
+          directory: "CACHE"
         });
+        if (Share) {
+          await Share.share({ title: fileName, url: res.uri });
+        } else {
+          alert("PDF salvo em: " + res.uri);
+        }
         return;
       }
     } catch (e) {
-      console.error("Erro ao chamar PdfPlugin:", e);
+      console.error("Erro ao salvar/abrir PDF (nativo):", e);
+      alert("Não foi possível gerar o PDF. Detalhe: " + (e && e.message ? e.message : e));
+      return;
     }
   }
   // Navegador desktop / Electron: comportamento padrão do jsPDF (baixa o arquivo)
   d.save(fileName);
+};
+
+// Salva/compartilha uma imagem PNG (dataURL) — usada no lugar do PDF na
+// impressão térmica 80mm, porque apps como o RawBT lidam com imagem de forma
+// muito mais confiável do que com PDF (evita sobra de papel/corte errado).
+const savePngImage = async (dataUrl, fileName) => {
+  if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+    try {
+      const Filesystem = window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem;
+      const Share = window.Capacitor.Plugins && window.Capacitor.Plugins.Share;
+      if (Filesystem) {
+        const base64Puro = dataUrl.split(",")[1];
+        const res = await Filesystem.writeFile({
+          path: fileName,
+          data: base64Puro,
+          directory: "CACHE"
+        });
+        if (Share) {
+          await Share.share({ title: fileName, url: res.uri });
+        } else {
+          alert("Imagem salva em: " + res.uri);
+        }
+        return;
+      }
+    } catch (e) {
+      console.error("Erro ao salvar/abrir imagem (nativo):", e);
+      alert("Não foi possível gerar a imagem. Detalhe: " + (e && e.message ? e.message : e));
+      return;
+    }
+  }
+  // Navegador desktop / Electron: baixa a imagem normalmente
+  const a = document.createElement("a");
+  a.href = dataUrl;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+};
+
+// Abre o diálogo de impressão NATIVO do sistema diretamente com o conteúdo
+// (sem precisar compartilhar pra nenhum app) usando o plugin
+// @capgo/capacitor-printer no Android. No navegador/desktop, abre uma aba
+// com a imagem e chama window.print() automaticamente.
+const imprimirNativo = async (dataUrl, mimeType, nomeDocumento) => {
+  try {
+    if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+      const Printer = window.Capacitor.Plugins && window.Capacitor.Plugins.Printer;
+      if (Printer && Printer.printBase64) {
+        const base64Puro = dataUrl.split(",")[1];
+        await Printer.printBase64({ name: nomeDocumento, data: base64Puro, mimeType });
+        return;
+      }
+      alert("Plugin de impressão nativa não encontrado. Rode \"npm install\" e \"npx cap sync\" no projeto Android.");
+      return;
+    }
+    // Navegador/desktop: abre a caixa de impressão nativa do sistema com o conteúdo
+    const w = window.open("", "_blank");
+    if (w) {
+      const corpo = mimeType === "application/pdf" ? "<embed src='" + dataUrl + "' type='application/pdf' style='width:100%;height:100vh'/>" : "<img src='" + dataUrl + "' style='width:100%' onload='window.print()'/>";
+      w.document.write("<html><head><title>" + nomeDocumento + "</title></head><body style='margin:0'>" + corpo + "</body></html>");
+      w.document.close();
+      if (mimeType === "application/pdf") setTimeout(() => w.print(), 600);
+    }
+  } catch (e) {
+    console.error("Erro ao abrir a impressão nativa:", e);
+    alert("Não foi possível abrir a impressão. Detalhe: " + (e && e.message ? e.message : e));
+  }
+};
+
+// Quebra um texto em linhas que cabem em maxWidthPx, usando as métricas reais
+// da fonte já configurada no contexto do canvas (equivalente ao
+// splitTextToSize do jsPDF, só que para Canvas 2D).
+const quebrarTextoCanvas = (ctx, texto, maxWidthPx) => {
+  const palavras = String(texto).split(" ");
+  const linhas = [];
+  let atual = "";
+  palavras.forEach(p => {
+    const teste = atual ? atual + " " + p : p;
+    if (ctx.measureText(teste).width > maxWidthPx && atual) {
+      linhas.push(atual);
+      atual = p;
+    } else {
+      atual = teste;
+    }
+  });
+  if (atual) linhas.push(atual);
+  return linhas.length ? linhas : [""];
 };
 
 const carregarJsPDF = async () => {
@@ -453,23 +558,71 @@ const diffDias = (a, b) => {
   const db = new Date(b + "T12:00");
   return Math.round((da - db) / 86400000);
 };
-// ── Impressão de etiquetas Elgin L42 Pro Full (1 coluna 30x60mm ou 3 colunas 20x30mm) ──
+// ── Etiquetas Elgin L42 Pro Full (1 coluna 30x60mm ou 3 colunas 20x30mm) ──
+// Gera uma imagem PNG (dataURL) do código de barras usando JsBarcode, desenhado
+// num canvas fora da tela — usado para inserir o código de barras no PDF.
+const gerarBarcodeDataUrl = async code => {
+  const src = "https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js";
+  if (!document.querySelector('script[src="' + src + '"]')) {
+    await new Promise((res, rej) => {
+      const s = document.createElement("script");
+      s.src = src;
+      s.onload = res;
+      s.onerror = rej;
+      document.head.appendChild(s);
+    });
+  }
+  const canvas = document.createElement("canvas");
+  window.JsBarcode(canvas, code, { format: "CODE128", width: 2, height: 70, displayValue: false, margin: 0 });
+  return canvas.toDataURL("image/png");
+};
+
+// Monta o PDF das etiquetas (1 etiqueta por página, no tamanho exato do rolo:
+// 30x60mm ou 20x30mm, igual ao layout da Elgin L42 Pro) e devolve o jsPDF.
 // items: array de { name, price, barcode }
-function printElginLabels(items, layout) {
-  if (!items || items.length === 0) return;
-  const pageCss = layout === "1col" ? "@page{size:30mm 60mm;margin:0}body{margin:0}" : "@page{size:20mm 30mm;margin:0}body{margin:0}";
-  const labelCss = layout === "1col" ? "width:30mm;height:60mm;padding:2mm 1.5mm;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;align-items:center;page-break-after:always;text-align:center;" : "width:20mm;height:30mm;padding:1mm;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;align-items:center;page-break-after:always;text-align:center;";
-  const nomeSize = layout === "1col" ? "11px" : "7px";
-  const precoSize = layout === "1col" ? "18px" : "11px";
-  const labelsHtml = items.map(item => {
+const construirPdfEtiquetas = async (items, layout) => {
+  const jsPDF = await carregarJsPDF();
+  const larguraMm = layout === "1col" ? 30 : 20;
+  const alturaMm = layout === "1col" ? 60 : 30;
+  const nomeFont = layout === "1col" ? 8 : 5;
+  const precoFont = layout === "1col" ? 13 : 8;
+  const codeFont = layout === "1col" ? 5 : 3.5;
+  const centro = larguraMm / 2;
+  const d = new jsPDF({ unit: "mm", format: [larguraMm, alturaMm] });
+  for (let idx = 0; idx < items.length; idx++) {
+    const item = items[idx];
+    if (idx > 0) d.addPage([larguraMm, alturaMm]);
     const nome = (item.name || "").toUpperCase();
     const preco = item.price ? fmt(item.price) : "—";
     const code = item.barcode || "";
-    return "<div class='label'>" + "<div style='font-size:" + nomeSize + ";font-weight:700;line-height:1.15;max-height:2.4em;overflow:hidden'>" + nome + "</div>" + "<div style='font-size:" + precoSize + ";font-weight:900;color:#000;margin:1mm 0'>" + preco + "</div>" + (code ? "<svg class='bc' data-code='" + code + "'></svg><div style='font-size:6px;letter-spacing:1px'>" + code + "</div>" : "") + "</div>";
-  }).join("");
-  const html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Etiquetas</title>" + "<style>" + pageCss + "*{font-family:Arial,sans-serif}.label{" + labelCss + "border:0}" + (layout === "3col" ? ".wrap{display:flex;flex-wrap:wrap}" : "") + "</style></head><body>" + "<div class='wrap'>" + labelsHtml + "</div>" + "<script src='https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js'><" + "/script>" + "<script>" + "window.onload=function(){" + "document.querySelectorAll('.bc').forEach(function(el){" + "try{JsBarcode(el, el.getAttribute('data-code'), {format:'CODE128',width:1.3,height:28,displayValue:false,margin:0});}catch(e){}" + "});" + "};" + "<" + "/script>" + "</body></html>";
-  printHTMLDoc(html, "Etiquetas", "etiqueta", layout === "1col" ? 30 : 20, layout === "1col" ? 60 : 30);
-}
+    let y = layout === "1col" ? 11 : 6;
+    d.setFont("helvetica", "bold");
+    d.setFontSize(nomeFont);
+    const maxLinhas = layout === "1col" ? 3 : 2;
+    const linhasNome = d.splitTextToSize(nome, larguraMm - 4).slice(0, maxLinhas);
+    d.text(linhasNome, centro, y, { align: "center" });
+    y += (nomeFont / 2.4) * linhasNome.length + (layout === "1col" ? 4 : 2.5);
+    d.setFontSize(precoFont);
+    d.text(preco, centro, y, { align: "center" });
+    y += layout === "1col" ? 8 : 5;
+    if (code) {
+      try {
+        const barcodeUrl = await gerarBarcodeDataUrl(code);
+        const bw = larguraMm - 6;
+        const bh = layout === "1col" ? 14 : 8;
+        d.addImage(barcodeUrl, "PNG", centro - bw / 2, y, bw, bh);
+        y += bh + 3;
+        d.setFont("helvetica", "normal");
+        d.setFontSize(codeFont);
+        d.text(code, centro, y, { align: "center" });
+      } catch (e) {
+        console.warn("[PDV] falha ao gerar c\xF3digo de barras da etiqueta:", e);
+      }
+    }
+  }
+  return d;
+};
+
 const load = (k, d) => {
   try {
     const v = localStorage.getItem(k);
@@ -7136,16 +7289,23 @@ function ListaComprasPage(_ref20) {
     if (!lista || lista.length === 0) return;
     setEtiquetaModal(lista);
   };
-  const confirmarImpressao = () => {
+  const confirmarImpressao = async () => {
     const lista = etiquetaModal;
     if (!lista || lista.length === 0) return;
-    printElginLabels(lista, etiquetaLayout);
+    notify("Gerando etiqueta(s) em PDF...", "info");
+    try {
+      const doc = await construirPdfEtiquetas(lista, etiquetaLayout);
+      savePdfDoc(doc, "etiquetas.pdf");
+      notify(lista.length + " etiqueta(s) gerada(s) em PDF ✓");
+    } catch (e) {
+      console.error("Erro ao gerar etiquetas em PDF:", e);
+      notify("Erro ao gerar etiquetas em PDF.", "error");
+    }
     // Remove os itens impressos da lista de compras
     const idsImpressos = lista.map(i => i.id);
     persist(items.filter(i => !idsImpressos.includes(i.id)));
     setSelecionadas(s => s.filter(id => !idsImpressos.includes(id)));
     setEtiquetaModal(null);
-    notify(lista.length + " etiqueta(s) enviada(s) para impressão ✓");
   };
   const removeItem = id => {
     addTombstone("lista_compras", id);
@@ -9412,82 +9572,126 @@ function EntregasPage(_ref24) {
   };
 
   // Monta o pedido de entrega como PDF de 80mm, pra compartilhar com o Thermer.
-  const construirPdfPedido80mm = async ped => {
+  // Monta o pedido de entrega como imagem PNG (canvas), no tamanho exato do
+  // conteúdo — usado na impressão térmica 80mm em vez de PDF, porque apps
+  // como o RawBT imprimem imagens de forma muito mais confiável (sem sobra
+  // de papel nem escala incorreta).
+  const construirImagemPedido80mm = async ped => {
     const st = ST[ped.status];
     const pgStatus = ped.pagamento || "";
     const pgLabel = pgStatus === "pago" ? "PAGO" : pgStatus === "troco" ? "LEVAR TROCO" : pgStatus === "maquina" ? "LEVAR M\xC1QUINA" : pgStatus === "troco_maquina" ? "LEVAR TROCO + M\xC1QUINA" : "";
-    const jsPDF = await carregarJsPDF();
+    const escala = 8; // px por mm (~203dpi, padrão de impressoras térmicas 80mm)
     const larguraMm = 80;
-    const margemX = 4;
-    const larguraUtil = larguraMm - margemX * 2;
-    const centro = larguraMm / 2;
-    const doc = new jsPDF({ unit: "mm", format: [larguraMm, 297] });
-    let y = 10;
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(12);
-    doc.text("PEDIDO DE ENTREGA", centro, y, { align: "center" });
-    y += 6;
-    doc.setFontSize(10);
-    doc.text(ped.numero + " - " + ped.criadoData + " " + ped.criadoHora, centro, y, { align: "center" });
-    y += 5;
-    doc.setLineDashPattern([1, 1], 0);
-    doc.line(margemX, y, larguraMm - margemX, y);
-    doc.setLineDashPattern([], 0);
-    y += 6;
-    doc.setFontSize(12);
-    const linha = txt => {
-      const partes = doc.splitTextToSize(txt, larguraUtil);
-      doc.text(partes, margemX, y);
-      y += 5.5 * partes.length;
+    const margemX = 4 * escala;
+    const larguraPx = larguraMm * escala;
+    const larguraUtil = larguraPx - margemX * 2;
+    const centro = larguraPx / 2;
+    // Desenha todo o conteúdo no contexto de canvas informado e devolve a
+    // posição Y final — usado tanto para medir a altura necessária (1ª
+    // passada) quanto para desenhar de fato (2ª passada).
+    const desenhar = ctx => {
+      ctx.textAlign = "left";
+      ctx.fillStyle = "#000";
+      let y = 10 * escala;
+      ctx.font = "bold " + 5 * escala + "px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("PEDIDO DE ENTREGA", centro, y);
+      y += 5.5 * escala;
+      ctx.font = 3.6 * escala + "px Arial";
+      ctx.fillText(ped.numero + " - " + ped.criadoData + " " + ped.criadoHora, centro, y);
+      y += 4 * escala;
+      const linhaPontilhada = () => {
+        ctx.save();
+        ctx.setLineDash([2 * escala * 0.4, 2 * escala * 0.4]);
+        ctx.beginPath();
+        ctx.moveTo(margemX, y);
+        ctx.lineTo(larguraPx - margemX, y);
+        ctx.stroke();
+        ctx.restore();
+      };
+      linhaPontilhada();
+      y += 6 * escala;
+      ctx.textAlign = "left";
+      ctx.font = 4.3 * escala + "px Arial";
+      const linha = txt => {
+        const partes = quebrarTextoCanvas(ctx, txt, larguraUtil);
+        partes.forEach(p => {
+          ctx.fillText(p, margemX, y);
+          y += 5.3 * escala;
+        });
+      };
+      linha("Status: " + st.label);
+      linha("Cliente: " + ped.cliente);
+      if (ped.telefone) linha("Tel: " + ped.telefone);
+      if (ped.endereco) linha("End: " + ped.endereco);
+      y += 1 * escala;
+      linhaPontilhada();
+      y += 6 * escala;
+      (ped.itens || []).forEach(i => {
+        const nomeLinhas = quebrarTextoCanvas(ctx, i.qty + "x " + i.name, larguraUtil - 22 * escala);
+        const precoTxt = fmt(i.price * i.qty);
+        nomeLinhas.forEach((linhaTxt, idx) => {
+          ctx.textAlign = "left";
+          ctx.fillText(linhaTxt, margemX, y);
+          if (idx === 0) {
+            ctx.textAlign = "right";
+            ctx.fillText(precoTxt, larguraPx - margemX, y);
+          }
+          y += 5.3 * escala;
+        });
+      });
+      y += 1 * escala;
+      linhaPontilhada();
+      y += 7 * escala;
+      ctx.font = "bold " + 4.7 * escala + "px Arial";
+      ctx.textAlign = "left";
+      ctx.fillText("TOTAL", margemX, y);
+      ctx.textAlign = "right";
+      ctx.fillText(fmt(ped.total), larguraPx - margemX, y);
+      y += 7 * escala;
+      ctx.font = 4.3 * escala + "px Arial";
+      if (pgLabel) {
+        ctx.strokeRect(margemX, y - 4 * escala, larguraUtil, 6.5 * escala);
+        ctx.textAlign = "center";
+        ctx.fillText(pgLabel, centro, y);
+        y += 9 * escala;
+      }
+      ctx.textAlign = "left";
+      if (ped.obs) {
+        linha("Obs: " + ped.obs);
+        y += 1 * escala;
+      }
+      y += 3 * escala;
+      linhaPontilhada();
+      y += 10 * escala;
+      ctx.textAlign = "center";
+      ctx.fillText("Assinatura: ______________________", centro, y);
+      y += 8 * escala;
+      return y;
     };
-    linha("Status: " + st.label);
-    linha("Cliente: " + ped.cliente);
-    if (ped.telefone) linha("Tel: " + ped.telefone);
-    if (ped.endereco) linha("End: " + ped.endereco);
-    y += 1;
-    doc.setLineDashPattern([1, 1], 0);
-    doc.line(margemX, y, larguraMm - margemX, y);
-    doc.setLineDashPattern([], 0);
-    y += 6;
-    (ped.itens || []).forEach(i => {
-      const nomeLinhas = doc.splitTextToSize(i.qty + "x " + i.name, larguraUtil - 22);
-      doc.text(nomeLinhas, margemX, y);
-      doc.text(fmt(i.price * i.qty), larguraMm - margemX, y, { align: "right" });
-      y += 5.5 * nomeLinhas.length;
-    });
-    y += 1;
-    doc.setLineDashPattern([1, 1], 0);
-    doc.line(margemX, y, larguraMm - margemX, y);
-    doc.setLineDashPattern([], 0);
-    y += 7;
-    doc.setFontSize(13);
-    doc.text("TOTAL", margemX, y);
-    doc.text(fmt(ped.total), larguraMm - margemX, y, { align: "right" });
-    y += 8;
-    doc.setFontSize(12);
-    if (pgLabel) {
-      doc.rect(margemX, y - 4.5, larguraUtil, 7);
-      doc.text(pgLabel, centro, y, { align: "center" });
-      y += 9;
-    }
-    if (ped.obs) {
-      linha("Obs: " + ped.obs);
-      y += 1;
-    }
-    y += 3;
-    doc.setLineDashPattern([1, 1], 0);
-    doc.line(margemX, y, larguraMm - margemX, y);
-    doc.setLineDashPattern([], 0);
-    y += 10;
-    doc.text("Assinatura: ______________________", centro, y, { align: "center" });
-    return doc;
+    // 1ª passada: canvas "alto o suficiente" só para medir a altura real.
+    const canvasMedida = document.createElement("canvas");
+    canvasMedida.width = larguraPx;
+    canvasMedida.height = 4000;
+    const alturaFinal = Math.ceil(desenhar(canvasMedida.getContext("2d")));
+    // 2ª passada: canvas final já no tamanho exato do conteúdo.
+    const canvas = document.createElement("canvas");
+    canvas.width = larguraPx;
+    canvas.height = alturaFinal;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    desenhar(ctx);
+    return canvas.toDataURL("image/png");
   };
 
   // Monta o pedido de entrega como PDF A4, usando jsPDF + autoTable.
+
   const construirPdfPedidoA4 = async ped => {
     const st = ST[ped.status];
     const pgStatus = ped.pagamento || "";
-    const pgLabel = pgStatus === "pago" ? "✅ PAGO" : pgStatus === "troco" ? "💵 LEVAR TROCO" : pgStatus === "maquina" ? "📲 LEVAR MÁQUINA" : pgStatus === "troco_maquina" ? "💵📲 LEVAR TROCO + MÁQUINA" : "";
+    const pgLabel = pgStatus === "pago" ? "PAGO" : pgStatus === "troco" ? "LEVAR TROCO" : pgStatus === "maquina" ? "LEVAR M\xC1QUINA" : pgStatus === "troco_maquina" ? "LEVAR TROCO + M\xC1QUINA" : "";
+    const pgColor = pgStatus === "pago" ? [39, 174, 96] : [231, 76, 60];
     for (const src of ["https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js", "https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"]) {
       if (!document.querySelector('script[src="' + src + '"]')) {
         await new Promise((res, rej) => {
@@ -9499,35 +9703,69 @@ function EntregasPage(_ref24) {
         });
       }
     }
+    // Descobre a proporção da logo para não distorcê-la no PDF
+    let logoW = 0,
+      logoH = 0;
+    try {
+      const dim = await new Promise((res, rej) => {
+        const img = new Image();
+        img.onload = () => res({ w: img.naturalWidth, h: img.naturalHeight });
+        img.onerror = rej;
+        img.src = LOGO_SRC;
+      });
+      logoH = 16;
+      logoW = dim.w && dim.h ? logoH * (dim.w / dim.h) : 16;
+    } catch (e) {
+      console.warn("[PDV] falha ao carregar logo para o PDF A4:", e);
+    }
     const jsPDF = window.jspdf.jsPDF;
     const d = new jsPDF();
-    let y = 20;
-    d.setFontSize(16);
-    d.setTextColor(45, 58, 140);
-    d.text("PEDIDO DE ENTREGA", 14, y);
-    y += 7;
+    const margemX = 14;
+    const larguraPag = 210;
+    const larguraUtil = larguraPag - margemX * 2;
+    let y = 12;
+    // Cabeçalho azul com a logo
+    d.setFillColor(45, 58, 140);
+    d.rect(margemX, y, larguraUtil, 22, "F");
+    if (logoW) {
+      try {
+        d.addImage(LOGO_SRC, "JPEG", margemX + 6, y + 3, logoW, logoH);
+      } catch (e) {
+        console.warn("[PDV] falha ao inserir logo no PDF A4:", e);
+      }
+    }
+    const textoX = margemX + (logoW ? logoW + 14 : 8);
+    d.setTextColor(255, 255, 255);
+    d.setFontSize(15);
+    d.text("PEDIDO DE ENTREGA", textoX, y + 10);
     d.setFontSize(10);
-    d.setTextColor(120);
-    d.text((ped.numero || "") + " · " + ped.criadoData + " " + ped.criadoHora, 14, y);
-    y += 8;
+    d.text((ped.numero || "") + " · " + ped.criadoData + " " + ped.criadoHora, textoX, y + 16);
+    y += 30;
+    // Caixa de status/cliente
+    const infoLinhas = [];
+    if (ped.endereco) infoLinhas.push(...d.splitTextToSize("Endereço: " + ped.endereco, larguraUtil - 8));
+    const infoAltura = 18 + infoLinhas.length * 5.5;
+    d.setFillColor(249, 250, 251);
+    d.setDrawColor(229, 231, 235);
+    d.rect(margemX, y, larguraUtil, infoAltura, "FD");
+    let yInfo = y + 7;
     d.setFontSize(11);
     d.setTextColor(0);
-    d.text("Status: " + st.emoji + " " + st.label, 14, y);
-    y += 6;
-    d.text("Cliente: " + ped.cliente, 14, y);
-    y += 6;
-    if (ped.telefone) {
-      d.text("Tel: " + ped.telefone, 14, y);
-      y += 6;
+    d.text("Status: " + st.label, margemX + 4, yInfo);
+    d.setTextColor(45, 58, 140);
+    d.text("Total: " + fmt(ped.total), margemX + larguraUtil - 4, yInfo, { align: "right" });
+    yInfo += 6;
+    d.setTextColor(0);
+    d.text("Cliente: " + ped.cliente + (ped.telefone ? "   ·   Tel: " + ped.telefone : ""), margemX + 4, yInfo);
+    yInfo += 6;
+    if (infoLinhas.length) {
+      d.text(infoLinhas, margemX + 4, yInfo);
+      yInfo += infoLinhas.length * 5.5;
     }
-    if (ped.endereco) {
-      const linhasEnd = d.splitTextToSize("Endereço: " + ped.endereco, 180);
-      d.text(linhasEnd, 14, y);
-      y += 6 * linhasEnd.length;
-    }
-    y += 2;
+    y += infoAltura + 8;
     d.autoTable({
       startY: y,
+      margin: { left: margemX, right: margemX },
       head: [["Produto", "Qtd", "Valor"]],
       body: (ped.itens || []).map(i => [i.name, i.qty + "x", fmt(i.price * i.qty)]),
       theme: "striped",
@@ -9538,34 +9776,72 @@ function EntregasPage(_ref24) {
     y = d.lastAutoTable.finalY + 8;
     d.setFontSize(13);
     d.setTextColor(45, 58, 140);
-    d.text("TOTAL: " + fmt(ped.total), 196, y, { align: "right" });
+    d.text("TOTAL: " + fmt(ped.total), margemX + larguraUtil, y, { align: "right" });
     y += 10;
     d.setFontSize(11);
     if (pgLabel) {
-      d.setTextColor(0);
-      d.rect(14, y - 5, 182, 8);
-      d.text(pgLabel, 105, y, { align: "center" });
-      y += 12;
+      d.setDrawColor(pgColor[0], pgColor[1], pgColor[2]);
+      d.setLineWidth(0.6);
+      d.rect(margemX, y - 5, larguraUtil, 9);
+      d.setLineWidth(0.2);
+      d.setTextColor(pgColor[0], pgColor[1], pgColor[2]);
+      d.text(pgLabel, margemX + larguraUtil / 2, y + 0.5, { align: "center" });
+      y += 13;
     }
     if (ped.obs) {
+      d.setFillColor(255, 251, 235);
+      d.setDrawColor(254, 240, 138);
+      const linhasObs = d.splitTextToSize("Obs: " + ped.obs, larguraUtil - 8);
+      const obsAltura = linhasObs.length * 5.5 + 5;
+      d.rect(margemX, y - 4, larguraUtil, obsAltura, "FD");
       d.setTextColor(0);
-      const linhasObs = d.splitTextToSize("Obs: " + ped.obs, 182);
-      d.text(linhasObs, 14, y);
-      y += 6 * linhasObs.length + 4;
+      d.text(linhasObs, margemX + 4, y + 1);
+      y += obsAltura + 6;
     }
-    y += 14;
-    d.setTextColor(80);
-    d.text("Assinatura do recebedor: _______________________________", 14, y);
+    y += 12;
+    d.setDrawColor(45, 58, 140);
+    d.setLineWidth(0.6);
+    d.line(margemX, y, margemX + larguraUtil, y);
+    d.setLineWidth(0.2);
+    y += 10;
+    d.setFontSize(11);
+    d.setTextColor(80, 80, 80);
+    d.text("Assinatura do recebedor: _______________________________", margemX, y);
     y += 8;
-    d.text("Data: _____ / _____ / _______", 14, y);
+    d.text("Data: _____ / _____ / _______", margemX, y);
     return d;
   };
 
   // Gera o PDF do pedido (80mm ou A4) e salva/baixa no dispositivo.
+  // Botão de impressão nativa — abre o diálogo de impressão do Android
+  // direto (sem passar por "compartilhar"), já com o pedido pronto (80mm).
+  const imprimirPedidoNativo = async ped => {
+    notify("Abrindo impressão...", "info");
+    try {
+      const dataUrl = await construirImagemPedido80mm(ped);
+      await imprimirNativo(dataUrl, "image/png", "Pedido " + (ped.numero || ""));
+    } catch (e) {
+      console.error("Erro ao abrir impressão nativa do pedido:", e);
+      notify("Erro ao abrir a impressão.", "error");
+    }
+  };
+
   const gerarPdfPedido = async (ped, modo) => {
+    if (modo === "80mm") {
+      notify("Gerando pedido em imagem...", "info");
+      try {
+        const dataUrl = await construirImagemPedido80mm(ped);
+        savePngImage(dataUrl, "pedido-" + (ped.numero || "entrega") + ".png");
+        notify("Imagem gerada! ✓");
+      } catch (e) {
+        console.error("Erro ao gerar imagem do pedido:", e);
+        notify("Erro ao gerar a imagem do pedido.", "error");
+      }
+      return;
+    }
     notify("Gerando PDF...", "info");
     try {
-      const doc = modo === "80mm" ? await construirPdfPedido80mm(ped) : await construirPdfPedidoA4(ped);
+      const doc = await construirPdfPedidoA4(ped);
       savePdfDoc(doc, "pedido-" + (ped.numero || "entrega") + ".pdf");
       notify("PDF gerado! ✓");
     } catch (e) {
@@ -9953,7 +10229,19 @@ function EntregasPage(_ref24) {
         color: "#4ade80",
         borderColor: "#4ade8040"
       }
-    }, "\uD83D\uDCDD Lan\xE7ar no Hist\xF3rico"), /*#__PURE__*/React.createElement("div", {
+    }, "\uD83D\uDCDD Lan\xE7ar no Hist\xF3rico"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => imprimirPedidoNativo(ped),
+      style: {
+        ...S.btn("primary"),
+        flex: 1,
+        justifyContent: "center",
+        padding: "7px",
+        fontSize: 12
+      }
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: "printer",
+      size: 13
+    }), " Imprimir"), /*#__PURE__*/React.createElement("div", {
       style: {
         position: "relative",
         flex: 1
@@ -12413,6 +12701,10 @@ function PDVApp() {
     _useState174 = _slicedToArray(_useState173, 2),
     page = _useState174[0],
     setPage = _useState174[1];
+  const _useStateReciboPM = useState(null),
+    _useStateReciboPM2 = _slicedToArray(_useStateReciboPM, 2),
+    reciboPrintMenuId = _useStateReciboPM2[0],
+    setReciboPrintMenuId = _useStateReciboPM2[1];
   const _useStateDP = useState("hoje"),
     _useStateDP2 = _slicedToArray(_useStateDP, 2),
     dashPeriodo = _useStateDP2[0],
@@ -13093,96 +13385,262 @@ function PDVApp() {
     const css = "@page{size:" + larguraMm + "mm auto;margin:0}" + "*{box-sizing:border-box;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}" + "body{font-family:Arial,Helvetica,sans-serif;width:" + (larguraMm - 4) + "mm;margin:0 auto;padding:2mm;color:#000;font-size:12px;font-weight:700}" + "hr{border:none;border-top:1px dashed #000;margin:6px 0}" + ".center{text-align:center}" + ".b{font-weight:700}" + ".logo{max-width:60%;max-height:16mm;margin:0 auto 4px;display:block}" + ".titulo{font-size:12px;font-weight:700;letter-spacing:1px}" + ".item{display:flex;justify-content:space-between;gap:6px;margin:2px 0}" + ".total{display:flex;justify-content:space-between;font-size:12px;font-weight:700;margin-top:6px}" + ".box{border:1px solid #000;padding:4px;margin:6px 0;text-align:center;font-weight:700}" + "@media print{body{width:" + (larguraMm - 4) + "mm}}";
     return "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Recibo</title><style>" + css + "</style></head><body>" + "<div class='center'>" + "<img class='logo' src='" + logoSrc + "'/>" + "<div class='titulo'>RECIBO DE VENDA</div>" + "<div>" + s.date + " " + s.time + " \xB7 N\xBA " + s.id.slice(-8).toUpperCase() + "</div>" + "</div>" + "<hr>" + "<div><span class='b'>Cliente:</span> " + ((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer) + "</div>" + (cliente !== null && cliente !== void 0 && cliente.cpf ? "<div><span class='b'>CPF/CNPJ:</span> " + cliente.cpf + "</div>" : "") + (cliente !== null && cliente !== void 0 && cliente.phone ? "<div><span class='b'>Tel:</span> " + cliente.phone + "</div>" : "") + (endCli ? "<div><span class='b'>End:</span> " + endCli + "</div>" : "") + "<hr>" + itemRowsTerm + "<hr>" + "<div class='total'><span>TOTAL</span><span>" + fmt(s.total) + "</span></div>" + "<div style='margin-top:4px'><span class='b'>Pagamento:</span> " + s.payment + "</div>" + (isPrazo ? "<div class='box'>\u26A0\uFE0F A PRAZO</div>" : "") + "<hr>" + "<div class='center'>Obrigado pela prefer\xEAncia! \uD83D\uDC3E</div>" + promissoria + "</body></html>";
   };
-  const imprimirRecibo = async s => {
-    const cliente = customers.find(c => c.name === s.customer);
-    let logoSrc = LOGO_SRC;
+  // Botão de impressão nativa — abre o diálogo de impressão do Android
+  // direto (sem passar por "compartilhar"), já com o recibo pronto (80mm).
+  const imprimirReciboNativo = async s => {
+    notify("Abrindo impressão...", "info");
     try {
-      logoSrc = await processarImagemTermica(LOGO_SRC, THERMAL_WIDTH_80MM);
+      const dataUrl = await construirImagemRecibo80mm(s);
+      await imprimirNativo(dataUrl, "image/png", "Recibo " + s.id.slice(-8));
     } catch (e) {
-      console.warn("[PDV] falha ao processar logo t\xE9rmica, usando original:", e);
+      console.error("Erro ao abrir impressão nativa do recibo:", e);
+      notify("Erro ao abrir a impressão.", "error");
     }
-    const html = htmlRecibo(s, cliente, logoSrc);
-    printHTMLDoc(html, undefined, "80mm", 80);
   };
 
-  // Monta o mesmo conteúdo do recibo, só que como PDF de 80mm (em vez de
-  // HTML), pra poder ser compartilhado com o app Thermer.
-  const construirPdfRecibo80mm = async s => {
+  const imprimirRecibo = async (s, modo) => {
+    if (modo === "a4") {
+      notify("Gerando recibo em PDF...", "info");
+      try {
+        const doc = await construirPdfReciboA4(s);
+        savePdfDoc(doc, "recibo-" + s.id.slice(-8) + ".pdf");
+        notify("PDF gerado! ✓");
+      } catch (e) {
+        console.error("Erro ao gerar recibo em PDF:", e);
+        notify("Erro ao gerar o recibo em PDF.", "error");
+      }
+      return;
+    }
+    notify("Gerando recibo em imagem...", "info");
+    try {
+      const dataUrl = await construirImagemRecibo80mm(s);
+      savePngImage(dataUrl, "recibo-" + s.id.slice(-8) + ".png");
+      notify("Imagem gerada! ✓");
+    } catch (e) {
+      console.error("Erro ao gerar recibo em imagem:", e);
+      notify("Erro ao gerar o recibo em imagem.", "error");
+    }
+  };
+
+  // Monta o recibo como imagem PNG (canvas), no tamanho exato do conteúdo —
+  // evita o bug de scaling/A4 que apps como o RawBT têm com PDF.
+  const construirImagemRecibo80mm = async s => {
     const cliente = customers.find(c => c.name === s.customer);
-    const jsPDF = await carregarJsPDF();
+    const escala = 8;
     const larguraMm = 80;
-    const margemX = 4;
-    const larguraUtil = larguraMm - margemX * 2;
-    const centro = larguraMm / 2;
-    const doc = new jsPDF({ unit: "mm", format: [larguraMm, 297] });
-    let y = 10;
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(12);
-    doc.text("RECIBO DE VENDA", centro, y, { align: "center" });
-    y += 6;
-    doc.setFontSize(10);
-    doc.text(s.date + " " + s.time + " - N\xBA " + s.id.slice(-8).toUpperCase(), centro, y, { align: "center" });
-    y += 5;
-    doc.setLineDashPattern([1, 1], 0);
-    doc.line(margemX, y, larguraMm - margemX, y);
-    doc.setLineDashPattern([], 0);
-    y += 6;
-    doc.setFontSize(12);
-    const linha = txt => {
-      const partes = doc.splitTextToSize(txt, larguraUtil);
-      doc.text(partes, margemX, y);
-      y += 5.5 * partes.length;
+    const margemX = 4 * escala;
+    const larguraPx = larguraMm * escala;
+    const larguraUtil = larguraPx - margemX * 2;
+    const centro = larguraPx / 2;
+    const desenhar = ctx => {
+      ctx.fillStyle = "#000";
+      let y = 10 * escala;
+      ctx.font = "bold " + 5 * escala + "px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("RECIBO DE VENDA", centro, y);
+      y += 5.5 * escala;
+      ctx.font = 3.6 * escala + "px Arial";
+      ctx.fillText(s.date + " " + s.time + " - N\xBA " + s.id.slice(-8).toUpperCase(), centro, y);
+      y += 4 * escala;
+      const linhaPontilhada = () => {
+        ctx.save();
+        ctx.setLineDash([2 * escala * 0.4, 2 * escala * 0.4]);
+        ctx.beginPath();
+        ctx.moveTo(margemX, y);
+        ctx.lineTo(larguraPx - margemX, y);
+        ctx.stroke();
+        ctx.restore();
+      };
+      linhaPontilhada();
+      y += 6 * escala;
+      ctx.textAlign = "left";
+      ctx.font = 4.3 * escala + "px Arial";
+      const linha = txt => {
+        const partes = quebrarTextoCanvas(ctx, txt, larguraUtil);
+        partes.forEach(p => {
+          ctx.fillText(p, margemX, y);
+          y += 5.3 * escala;
+        });
+      };
+      linha("Cliente: " + ((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer));
+      if (cliente !== null && cliente !== void 0 && cliente.cpf) linha("CPF/CNPJ: " + cliente.cpf);
+      if (cliente !== null && cliente !== void 0 && cliente.phone) linha("Tel: " + cliente.phone);
+      y += 1 * escala;
+      linhaPontilhada();
+      y += 6 * escala;
+      s.items.forEach(i => {
+        const nomeLinhas = quebrarTextoCanvas(ctx, i.qty + "x " + i.name, larguraUtil - 22 * escala);
+        const precoTxt = fmt(i.price * i.qty);
+        nomeLinhas.forEach((linhaTxt, idx) => {
+          ctx.textAlign = "left";
+          ctx.fillText(linhaTxt, margemX, y);
+          if (idx === 0) {
+            ctx.textAlign = "right";
+            ctx.fillText(precoTxt, larguraPx - margemX, y);
+          }
+          y += 5.3 * escala;
+        });
+      });
+      y += 1 * escala;
+      linhaPontilhada();
+      y += 7 * escala;
+      ctx.font = "bold " + 4.7 * escala + "px Arial";
+      ctx.textAlign = "left";
+      ctx.fillText("TOTAL", margemX, y);
+      ctx.textAlign = "right";
+      ctx.fillText(fmt(s.total), larguraPx - margemX, y);
+      y += 7 * escala;
+      ctx.font = 4.3 * escala + "px Arial";
+      ctx.textAlign = "left";
+      linha("Pagamento: " + s.payment);
+      if (s.payment === "A Prazo") {
+        y += 1 * escala;
+        ctx.strokeRect(margemX, y - 4 * escala, larguraUtil, 6.5 * escala);
+        ctx.textAlign = "center";
+        ctx.fillText("\u26A0 A PRAZO", centro, y);
+        ctx.textAlign = "left";
+        y += 7 * escala;
+      }
+      y += 3 * escala;
+      linhaPontilhada();
+      y += 6 * escala;
+      ctx.font = 3.9 * escala + "px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("Obrigado pela prefer\xEAncia!", centro, y);
+      y += 6 * escala;
+      return y;
     };
-    linha("Cliente: " + ((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer));
-    if (cliente !== null && cliente !== void 0 && cliente.cpf) linha("CPF/CNPJ: " + cliente.cpf);
-    if (cliente !== null && cliente !== void 0 && cliente.phone) linha("Tel: " + cliente.phone);
-    y += 1;
-    doc.setLineDashPattern([1, 1], 0);
-    doc.line(margemX, y, larguraMm - margemX, y);
-    doc.setLineDashPattern([], 0);
-    y += 6;
-    s.items.forEach(i => {
-      const nomeLinhas = doc.splitTextToSize(i.qty + "x " + i.name, larguraUtil - 22);
-      doc.text(nomeLinhas, margemX, y);
-      doc.text(fmt(i.price * i.qty), larguraMm - margemX, y, { align: "right" });
-      y += 5.5 * nomeLinhas.length;
-    });
-    y += 1;
-    doc.setLineDashPattern([1, 1], 0);
-    doc.line(margemX, y, larguraMm - margemX, y);
-    doc.setLineDashPattern([], 0);
-    y += 7;
-    doc.setFontSize(13);
-    doc.text("TOTAL", margemX, y);
-    doc.text(fmt(s.total), larguraMm - margemX, y, { align: "right" });
-    y += 7;
-    doc.setFontSize(12);
-    linha("Pagamento: " + s.payment);
-    if (s.payment === "A Prazo") {
-      y += 1;
-      doc.rect(margemX, y - 4.5, larguraUtil, 7);
-      doc.text("\u26A0 A PRAZO", centro, y, { align: "center" });
-      y += 7;
-    }
-    y += 3;
-    doc.setLineDashPattern([1, 1], 0);
-    doc.line(margemX, y, larguraMm - margemX, y);
-    doc.setLineDashPattern([], 0);
-    y += 6;
-    doc.setFontSize(11);
-    doc.text("Obrigado pela prefer\xEAncia!", centro, y, { align: "center" });
-    return doc;
+    const canvasMedida = document.createElement("canvas");
+    canvasMedida.width = larguraPx;
+    canvasMedida.height = 4000;
+    const alturaFinal = Math.ceil(desenhar(canvasMedida.getContext("2d")));
+    const canvas = document.createElement("canvas");
+    canvas.width = larguraPx;
+    canvas.height = alturaFinal;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    desenhar(ctx);
+    return canvas.toDataURL("image/png");
   };
 
-  const imprimirReciboThermer = async s => {
-    notify("Preparando recibo para o Thermer...", "info");
-    try {
-      const doc = await construirPdfRecibo80mm(s);
-      await enviarParaThermer(doc, "recibo-" + s.id.slice(-8) + ".pdf");
-    } catch (e) {
-      console.error("Erro ao montar PDF do recibo para o Thermer:", e);
-      notify("Erro ao preparar o recibo para o Thermer.", "error");
+  // Monta o recibo como PDF A4, com logo e formatação colorida (mesmo
+  // padrão visual usado no PDF A4 do pedido de entrega).
+  const construirPdfReciboA4 = async s => {
+    const cliente = customers.find(c => c.name === s.customer);
+    const isPrazo = s.payment === "A Prazo";
+    for (const src of ["https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js", "https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"]) {
+      if (!document.querySelector('script[src="' + src + '"]')) {
+        await new Promise((res, rej) => {
+          const el = document.createElement("script");
+          el.src = src;
+          el.onload = res;
+          el.onerror = rej;
+          document.head.appendChild(el);
+        });
+      }
     }
+    // Descobre a proporção da logo para não distorcê-la no PDF
+    let logoW = 0,
+      logoH = 0;
+    try {
+      const dim = await new Promise((res, rej) => {
+        const img = new Image();
+        img.onload = () => res({ w: img.naturalWidth, h: img.naturalHeight });
+        img.onerror = rej;
+        img.src = LOGO_SRC;
+      });
+      logoH = 16;
+      logoW = dim.w && dim.h ? logoH * (dim.w / dim.h) : 16;
+    } catch (e) {
+      console.warn("[PDV] falha ao carregar logo para o PDF A4 do recibo:", e);
+    }
+    const jsPDF = window.jspdf.jsPDF;
+    const d = new jsPDF();
+    const margemX = 14;
+    const larguraPag = 210;
+    const larguraUtil = larguraPag - margemX * 2;
+    let y = 12;
+    // Cabeçalho azul com a logo
+    d.setFillColor(45, 58, 140);
+    d.rect(margemX, y, larguraUtil, 22, "F");
+    if (logoW) {
+      try {
+        d.addImage(LOGO_SRC, "JPEG", margemX + 6, y + 3, logoW, logoH);
+      } catch (e) {
+        console.warn("[PDV] falha ao inserir logo no PDF A4 do recibo:", e);
+      }
+    }
+    const textoX = margemX + (logoW ? logoW + 14 : 8);
+    d.setTextColor(255, 255, 255);
+    d.setFontSize(15);
+    d.text("RECIBO DE VENDA", textoX, y + 10);
+    d.setFontSize(10);
+    d.text(s.date + " " + s.time + " · Nº " + s.id.slice(-8).toUpperCase(), textoX, y + 16);
+    y += 30;
+    // Caixa de dados do cliente
+    const linhasEndereco = [];
+    const endCli = cliente ? [cliente.rua && cliente.rua + (cliente.numero ? ", " + cliente.numero : ""), cliente.bairro, cliente.cidade && cliente.cidade + (cliente.uf ? " - " + cliente.uf : "")].filter(Boolean).join(" · ") : "";
+    if (endCli) linhasEndereco.push(...d.splitTextToSize("Endereço: " + endCli, larguraUtil - 8));
+    const infoAltura = 12 + linhasEndereco.length * 5.5;
+    d.setFillColor(249, 250, 251);
+    d.setDrawColor(229, 231, 235);
+    d.rect(margemX, y, larguraUtil, infoAltura, "FD");
+    let yInfo = y + 7;
+    d.setFontSize(11);
+    d.setTextColor(0);
+    d.text("Cliente: " + ((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer), margemX + 4, yInfo);
+    if (cliente !== null && cliente !== void 0 && cliente.cpf) {
+      d.text("CPF/CNPJ: " + cliente.cpf, margemX + larguraUtil - 4, yInfo, { align: "right" });
+    }
+    yInfo += 6;
+    if (cliente !== null && cliente !== void 0 && cliente.phone) {
+      d.text("Tel: " + cliente.phone, margemX + 4, yInfo);
+      yInfo += 6;
+    }
+    if (linhasEndereco.length) {
+      d.text(linhasEndereco, margemX + 4, yInfo);
+      yInfo += linhasEndereco.length * 5.5;
+    }
+    y += infoAltura + 8;
+    d.autoTable({
+      startY: y,
+      margin: { left: margemX, right: margemX },
+      head: [["Produto", "Qtd", "Valor"]],
+      body: (s.items || []).map(i => [i.name, i.qty + "x", fmt(i.price * i.qty)]),
+      theme: "striped",
+      headStyles: { fillColor: [45, 58, 140] },
+      styles: { fontSize: 10 },
+      columnStyles: { 1: { halign: "center" }, 2: { halign: "right" } }
+    });
+    y = d.lastAutoTable.finalY + 8;
+    d.setFontSize(13);
+    d.setTextColor(45, 58, 140);
+    d.text("TOTAL: " + fmt(s.total), margemX + larguraUtil, y, { align: "right" });
+    y += 8;
+    d.setFontSize(11);
+    d.setTextColor(0);
+    d.text("Pagamento: " + s.payment, margemX, y);
+    y += 6;
+    if (isPrazo) {
+      d.setDrawColor(231, 76, 60);
+      d.setLineWidth(0.6);
+      d.rect(margemX, y - 5, larguraUtil, 9);
+      d.setLineWidth(0.2);
+      d.setTextColor(231, 76, 60);
+      d.text("A PRAZO", margemX + larguraUtil / 2, y + 0.5, { align: "center" });
+      y += 13;
+    }
+    y += 12;
+    d.setDrawColor(45, 58, 140);
+    d.setLineWidth(0.6);
+    d.line(margemX, y, margemX + larguraUtil, y);
+    d.setLineWidth(0.2);
+    y += 10;
+    d.setFontSize(11);
+    d.setTextColor(80, 80, 80);
+    d.text("Obrigado pela preferência!", margemX + larguraUtil / 2, y, { align: "center" });
+    return d;
   };
 
   const compartilharRecibo = s => {
@@ -15781,9 +16239,9 @@ function PDVApp() {
       paddingTop: 8
     }
   }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => imprimirRecibo(s),
+    onClick: () => imprimirReciboNativo(s),
     style: {
-      ...S.btn("ghost"),
+      ...S.btn("primary"),
       flex: 1,
       justifyContent: "center",
       padding: "7px",
@@ -15792,7 +16250,61 @@ function PDVApp() {
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "printer",
     size: 12
-  }), " ", s.payment === "A Prazo" ? "Recibo + Promissória" : "Recibo"), /*#__PURE__*/React.createElement("button", {
+  }), " Imprimir"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "relative",
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setReciboPrintMenuId(reciboPrintMenuId === s.id ? null : s.id),
+    style: {
+      ...S.btn("ghost"),
+      width: "100%",
+      justifyContent: "center",
+      padding: "7px",
+      fontSize: 11
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "printer",
+    size: 12
+  }), " ", "Recibo"), reciboPrintMenuId === s.id && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "absolute",
+      bottom: "100%",
+      left: 0,
+      right: 0,
+      marginBottom: 4,
+      background: "var(--bg-card)",
+      border: "1px solid var(--bg-elevated)",
+      borderRadius: 10,
+      boxShadow: "0 4px 16px rgba(0,0,0,.3)",
+      overflow: "hidden",
+      zIndex: 20
+    }
+  }, [["80mm", "\uD83E\uDDFE T\xE9rmica 80mm"], ["a4", "\uD83D\uDCC4 Folha A4"]].map(_refRecPM => {
+    let val = _refRecPM[0],
+      label = _refRecPM[1];
+    return /*#__PURE__*/React.createElement("button", {
+      key: val,
+      onClick: () => {
+        imprimirRecibo(s, val);
+        setReciboPrintMenuId(null);
+      },
+      style: {
+        display: "block",
+        width: "100%",
+        textAlign: "left",
+        padding: "9px 12px",
+        background: "none",
+        border: "none",
+        borderBottom: "1px solid var(--bg-elevated)",
+        color: "var(--text-primary)",
+        fontSize: 12,
+        fontFamily: "inherit",
+        cursor: "pointer"
+      }
+    }, label);
+  }))), /*#__PURE__*/React.createElement("button", {
     onClick: () => compartilharRecibo(s),
     style: {
       ...S.btn("ghost"),
@@ -15802,15 +16314,6 @@ function PDVApp() {
       fontSize: 11
     }
   }, "\uD83D\uDCE4 Enviar"), /*#__PURE__*/React.createElement("button", {
-    onClick: () => imprimirReciboThermer(s),
-    style: {
-      ...S.btn("ghost"),
-      flex: 1,
-      justifyContent: "center",
-      padding: "7px",
-      fontSize: 11
-    }
-  }, "\uD83D\uDD35 Thermer"), /*#__PURE__*/React.createElement("button", {
     onClick: () => {
       setEditSale(s);
       setEditSaleForm({
@@ -16229,13 +16732,21 @@ function PDVApp() {
       style: { ...S.btn("ghost"), flex: 1, justifyContent: "center", padding: "13px" }
     }, "Cancelar"),
     /*#__PURE__*/React.createElement("button", {
-      onClick: () => {
-        printElginLabels([etiquetaProdModal], etiquetaProdLayout);
+      onClick: async () => {
+        const item = etiquetaProdModal;
         setEtiquetaProdModal(null);
-        notify("Etiqueta enviada para impressão ✓");
+        notify("Gerando etiqueta em PDF...", "info");
+        try {
+          const doc = await construirPdfEtiquetas([item], etiquetaProdLayout);
+          savePdfDoc(doc, "etiquetas.pdf");
+          notify("Etiqueta gerada em PDF ✓");
+        } catch (e) {
+          console.error("Erro ao gerar etiqueta em PDF:", e);
+          notify("Erro ao gerar etiqueta em PDF.", "error");
+        }
       },
       style: { ...S.btn("primary"), flex: 1, justifyContent: "center", padding: "13px" }
-    }, "🖨️ Imprimir")))), custSheet && /*#__PURE__*/React.createElement(CustomerSheet, {
+    }, "📄 Gerar PDF")))), custSheet && /*#__PURE__*/React.createElement(CustomerSheet, {
     S: S,
     initial: editCust,
     onSave: saveCustomer,
