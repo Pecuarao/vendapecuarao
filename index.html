@@ -243,9 +243,12 @@ const printHTMLDoc = (html, jobName, modo, larguraMm, alturaMm) => {
       console.error("Erro ao chamar PrintPlugin:", e);
     }
   }
-  // Navegador desktop / Electron (Windows): abordagem antiga via iframe + window.print()
+  // Navegador desktop / Electron (Windows) / Safari iOS: abordagem via iframe + window.print()
+  // Importante para iOS: o iframe NÃO pode ter width:0/height:0 nem visibility:hidden,
+  // senão o Safari simplesmente não imprime nada (só funciona com um iframe com
+  // dimensões reais, mesmo que posicionado fora da tela).
   const iframe = document.createElement("iframe");
-  iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
+  iframe.style.cssText = "position:fixed;left:-10000px;top:0;width:380px;height:600px;border:0";
   document.body.appendChild(iframe);
   iframe.contentDocument.open();
   iframe.contentDocument.write(html);
