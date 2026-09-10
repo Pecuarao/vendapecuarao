@@ -334,6 +334,17 @@ const gerarECompartilharPdfA4 = async (html, fileName, notifyFn) => {
   await compartilharArquivoAndroid(base64, fileName, notifyFn);
 };
 
+// Gera um PNG a partir do HTML e baixa direto no navegador (PC / Safari / Windows)
+const baixarImagem = async (html, fileName) => {
+  const canvas = await renderizarHtmlOffscreen(html);
+  const a = document.createElement("a");
+  a.href = canvas.toDataURL("image/png");
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+};
+
 // Polyfill para AbortSignal.timeout (iOS Safari < 16 não tem)
 const _timeoutSignal = ms => {
   const c = new AbortController();
@@ -9467,8 +9478,8 @@ function EntregasPage(_ref24) {
     const pgLabel = pgStatus === "pago" ? "✅ PAGO" : pgStatus === "troco" ? "💵 LEVAR TROCO" : pgStatus === "maquina" ? "📲 LEVAR MÁQUINA" : pgStatus === "troco_maquina" ? "💵📲 LEVAR TROCO + MÁQUINA" : "";
     const pgColor = pgStatus === "pago" ? "#27ae60" : "#e74c3c";
     let html;
-    if (modo === "80mm" || modo === "110mm") {
-      const larguraMm = modo === "80mm" ? 80 : 110;
+    if (modo === "80mm" || modo === "110mm" || modo === "termica2") {
+      const larguraMm = modo === "110mm" ? 110 : 80;
       const itemRowsTerm = (ped.itens || []).map(i => "<div class='item'><span>" + i.qty + "x " + i.name + "</span><span>" + fmt(i.price * i.qty) + "</span></div>").join("");
       const cssTerm = "@page{size:" + larguraMm + "mm auto;margin:0}" + "*{box-sizing:border-box}" + "body{font-family:Arial,Helvetica,sans-serif;width:" + (larguraMm - 4) + "mm;margin:0 auto;padding:2mm;color:#000;font-size:16px;font-weight:400}" + "hr{border:none;border-top:1px dashed #000;margin:6px 0}" + ".center{text-align:center}" + ".b{font-weight:400}" + ".titulo{font-size:16px;font-weight:700;letter-spacing:1px}" + ".item{display:flex;justify-content:space-between;gap:6px;margin:2px 0;font-size:16px}" + ".total{display:flex;justify-content:space-between;font-size:16px;font-weight:400;margin-top:6px}" + ".box{border:1px solid #000;padding:4px;margin:6px 0;text-align:center;font-weight:400;font-size:16px}" + "@media print{body{width:" + (larguraMm - 4) + "mm}}";
       html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + ped.numero + "</title><style>" + cssTerm + "</style></head><body>" + "<div class='center'>" + "<div class='titulo'>PEDIDO DE ENTREGA</div>" + "<div>" + ped.numero + " · " + ped.criadoData + " " + ped.criadoHora + "</div>" + "</div>" + "<hr>" + "<div><span class='b'>Status:</span> " + st.emoji + " " + st.label + "</div>" + "<div><span class='b'>Cliente:</span> " + ped.cliente + "</div>" + (ped.telefone ? "<div><span class='b'>Tel:</span> " + ped.telefone + "</div>" : "") + (ped.endereco ? "<div><span class='b'>End:</span> " + ped.endereco + "</div>" : "") + "<hr>" + itemRowsTerm + "<hr>" + "<div class='total'><span>TOTAL</span><span>" + fmt(ped.total) + "</span></div>" + (pgLabel ? "<div class='box'>" + pgLabel + "</div>" : "") + (ped.obs ? "<hr><div><span class='b'>Obs:</span> " + ped.obs + "</div>" : "") + "<hr>" + "<div style='margin-top:14px;white-space:nowrap'>Assinatura: ______________________</div>" + "<div class='center' style='margin-top:16px'></div>" + "</body></html>";
@@ -9478,6 +9489,21 @@ function EntregasPage(_ref24) {
       html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + ped.numero + "</title><style>" + css + "</style></head><body>" + "<div style='background:#2D3A8C;color:#fff;padding:14px;border-radius:8px;margin-bottom:16px;display:flex;align-items:center;gap:12px'>" + "<img src='" + LOGO_SRC + "' alt='logo' style='height:40px;flex-shrink:0'/>" + "<div style='text-align:left'>" + "<div style='font-size:15px;font-weight:800;letter-spacing:1px'>PEDIDO DE ENTREGA</div>" + "<div style='font-size:11px;margin-top:3px;opacity:.85'>" + ped.numero + " · " + ped.criadoData + " " + ped.criadoHora + "</div>" + "</div>" + "</div>" + "<div style='background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-bottom:12px;font-size:12px'>" + "<div style='display:flex;justify-content:space-between;margin-bottom:4px'>" + "<span><b>Status:</b> " + st.emoji + " " + st.label + "</span>" + "<span><b>Total:</b> <span style='color:#2D3A8C;font-weight:800'>" + fmt(ped.total) + "</span></span></div>" + "<b>Cliente:</b> " + ped.cliente + (ped.telefone ? " · 📞" + ped.telefone : "") + "<br>" + (ped.endereco ? "<b>Endereço:</b> 📍" + ped.endereco + "<br>" : "") + "</div>" + "<table><thead><tr><th>Produto</th><th style='text-align:center'>Qtd</th><th style='text-align:right'>Valor</th></tr></thead><tbody>" + itemRows + "</tbody></table>" + "<div class='total'>TOTAL: " + fmt(ped.total) + "</div>" + (pgLabel ? "<div style='margin-top:10px;padding:10px;border-radius:6px;border:2px solid " + pgColor + ";font-size:13px;font-weight:800;text-align:center;color:" + pgColor + "'>" + pgLabel + "</div>" : "") + (ped.obs ? "<div style='background:#fffbeb;border:1px solid #fef08a;padding:8px;border-radius:6px;font-size:12px;margin-top:8px'><b>Obs:</b> " + ped.obs + "</div>" : "") + "<div style='border-top:2px solid #2D3A8C;margin-top:20px;padding-top:14px;font-size:11px;color:#888;text-align:center'>" + "Assinatura do recebedor: _______________________________<br><br>Data: _____ / _____ / _______" + "</div>" + "</body></html>";
     }
     const isAndroidNativo = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === "android";
+    if (modo === "termica2") {
+      try {
+        notify("Gerando imagem do pedido...", "info");
+        const fileName = (ped.numero || "pedido") + "-termica2.png";
+        if (isAndroidNativo) {
+          await gerarECompartilharPng(html, fileName, notify);
+        } else {
+          await baixarImagem(html, fileName);
+        }
+      } catch (e) {
+        console.error("Erro ao gerar imagem (Térmica 2):", e);
+        notify("Não foi possível gerar a imagem.", "error");
+      }
+      return;
+    }
     if (isAndroidNativo) {
       try {
         if (modo === "80mm") {
@@ -9989,7 +10015,7 @@ function EntregasPage(_ref24) {
         overflow: "hidden",
         zIndex: 20
       }
-    }, [["80mm", "\uD83E\uDDFE T\xE9rmica 80mm"], ["a4", "\uD83D\uDCC4 Folha A4"]].map(_ref2c => {
+    }, [["80mm", "\uD83E\uDDFE T\xE9rmica 80mm"], ["termica2", "\uD83D\uDDBC\uFE0F T\xE9rmica 2 (imagem)"], ["a4", "\uD83D\uDCC4 Folha A4"]].map(_ref2c => {
       let val = _ref2c[0],
         label = _ref2c[1];
       return /*#__PURE__*/React.createElement("button", {
