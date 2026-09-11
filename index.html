@@ -12416,6 +12416,7 @@ function renderRelatorioConteudo(tipo, d) {
 function PDVApp() {
   var _NAV$find;
   const screen = useScreenSize();
+  const [printMenuVendaId, setPrintMenuVendaId] = useState(null);
   const _useStateTheme = useState(() => localStorage.getItem('pdv_theme') || 'dark'),
     _useStateTheme2 = _slicedToArray(_useStateTheme, 2),
     theme = _useStateTheme2[0],
@@ -13152,6 +13153,61 @@ function PDVApp() {
       return;
     }
     printHTMLDoc(html, undefined, "80mm", 80);
+  };
+
+  // Recibo em modelo "Térmica 2": mesmo conteúdo do recibo de 80mm, porém sem
+  // logo, sem negrito, 6mm a mais de cada lado, letra maior e sem emoji —
+  // sempre vira PNG (compartilha no Android, baixa no PC/Safari).
+  const htmlReciboTermica2 = (s, cliente) => {
+    const isPrazo = s.payment === "A Prazo";
+    const larguraMm = 92;
+    const fsTerm = 20;
+    const itemRowsTerm = s.items.map(i => "<div class='item'><span>" + i.qty + "x " + i.name + "</span><span>" + fmt(i.price * i.qty) + "</span></div>").join("");
+    const endCli = cliente ? [cliente.rua && cliente.rua + (cliente.numero ? ", " + cliente.numero : ""), cliente.bairro, cliente.cidade && cliente.cidade + (cliente.uf ? " - " + cliente.uf : "")].filter(Boolean).join(", ") : "";
+    const css = "@page{size:" + larguraMm + "mm auto;margin:0}" + "*{box-sizing:border-box}" + "body{font-family:Arial,Helvetica,sans-serif;width:" + (larguraMm - 4) + "mm;margin:0 auto;padding:2mm;color:#000;font-size:" + fsTerm + "px;font-weight:400}" + "hr{border:none;border-top:1px dashed #000;margin:6px 0}" + ".center{text-align:center}" + ".b{font-weight:400}" + ".titulo{font-size:" + fsTerm + "px;font-weight:700;letter-spacing:1px}" + ".sub{font-size:11px}" + ".item{display:flex;justify-content:space-between;gap:6px;margin:2px 0;font-size:" + fsTerm + "px}" + ".total{display:flex;justify-content:space-between;font-size:" + fsTerm + "px;font-weight:400;margin-top:6px}" + ".box{border:1px solid #000;padding:4px;margin:6px 0;text-align:center;font-weight:400;font-size:" + fsTerm + "px}" + "@media print{body{width:" + (larguraMm - 4) + "mm}}";
+    return "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Recibo</title><style>" + css + "</style></head><body>" + "<div class='center'>" + "<div class='titulo'>RECIBO DE VENDA</div>" + "<div class='sub'>" + s.date + " " + s.time + " \xB7 N\xBA " + s.id.slice(-8).toUpperCase() + "</div>" + "</div>" + "<hr>" + "<div><span class='b'>Cliente:</span> " + ((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer) + "</div>" + (cliente !== null && cliente !== void 0 && cliente.cpf ? "<div><span class='b'>CPF/CNPJ:</span> " + cliente.cpf + "</div>" : "") + (cliente !== null && cliente !== void 0 && cliente.phone ? "<div><span class='b'>Tel:</span> " + cliente.phone + "</div>" : "") + (endCli ? "<div><span class='b'>End:</span> " + endCli + "</div>" : "") + "<hr>" + itemRowsTerm + "<hr>" + "<div class='total'><span>TOTAL</span><span>" + fmt(s.total) + "</span></div>" + "<div style='margin-top:4px'><span class='b'>Pagamento:</span> " + s.payment + "</div>" + (isPrazo ? "<div class='box'>A PRAZO</div>" : "") + "<hr>" + "<div class='center'>Obrigado pela prefer\xEAncia!</div>" + "</body></html>";
+  };
+  const imprimirReciboTermica2 = async s => {
+    const cliente = customers.find(c => c.name === s.customer);
+    const html = htmlReciboTermica2(s, cliente);
+    const isAndroidNativo = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === "android";
+    try {
+      notify("Gerando imagem do recibo...", "info");
+      const fileName = "recibo-" + s.id.slice(-8) + "-termica2.png";
+      if (isAndroidNativo) {
+        await gerarECompartilharPng(html, fileName, notify);
+      } else {
+        await baixarImagem(html, fileName);
+      }
+    } catch (e) {
+      console.error("Erro ao gerar imagem (Térmica 2) do recibo:", e);
+      notify("Não foi possível gerar a imagem.", "error");
+    }
+  };
+
+  // Recibo em folha A4 — mesmo estilo visual usado no "Pedido de Entrega" A4.
+  const htmlReciboA4 = (s, cliente) => {
+    const isPrazo = s.payment === "A Prazo";
+    const endCli = cliente ? [cliente.rua && cliente.rua + (cliente.numero ? ", " + cliente.numero : ""), cliente.bairro, cliente.cidade && cliente.cidade + (cliente.uf ? " - " + cliente.uf : "")].filter(Boolean).join(", ") : "";
+    const itemRows = s.items.map(i => "<tr><td>" + i.name + "</td><td style='text-align:center'>" + i.qty + "x</td><td style='text-align:right;font-weight:600'>" + fmt(i.price * i.qty) + "</td></tr>").join("");
+    const css = "@page{margin:0}*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}body{font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;color:#111;}table{width:100%;border-collapse:collapse;font-size:12px;}th{background:#f3f4f6;padding:6px;text-align:left;font-size:10px;text-transform:uppercase;}td{padding:6px;border-bottom:1px solid #f3f4f6;}.total{font-size:16px;font-weight:800;text-align:right;margin-top:10px;color:#2D3A8C;}@media print{body{max-width:100%;padding:8px}}";
+    return "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Recibo</title><style>" + css + "</style></head><body>" + "<div style='background:#2D3A8C;color:#fff;padding:14px;border-radius:8px;margin-bottom:16px;display:flex;align-items:center;gap:12px'>" + "<img src='" + LOGO_SRC + "' alt='logo' style='height:40px;flex-shrink:0'/>" + "<div style='text-align:left'>" + "<div style='font-size:15px;font-weight:800;letter-spacing:1px'>RECIBO DE VENDA</div>" + "<div style='font-size:11px;margin-top:3px;opacity:.85'>" + s.date + " " + s.time + " \xB7 N\xBA " + s.id.slice(-8).toUpperCase() + "</div>" + "</div>" + "</div>" + "<div style='background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-bottom:12px;font-size:12px'>" + "<b>Cliente:</b> " + ((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer) + (cliente !== null && cliente !== void 0 && cliente.phone ? " \xB7 \uD83D\uDCDE" + cliente.phone : "") + "<br>" + (cliente !== null && cliente !== void 0 && cliente.cpf ? "<b>CPF/CNPJ:</b> " + cliente.cpf + "<br>" : "") + (endCli ? "<b>Endere\xE7o:</b> " + endCli + "<br>" : "") + "</div>" + "<table><thead><tr><th>Produto</th><th style='text-align:center'>Qtd</th><th style='text-align:right'>Valor</th></tr></thead><tbody>" + itemRows + "</tbody></table>" + "<div class='total'>TOTAL: " + fmt(s.total) + "</div>" + "<div style='margin-top:8px;font-size:12px'><b>Pagamento:</b> " + s.payment + "</div>" + (isPrazo ? "<div style='margin-top:10px;padding:10px;border-radius:6px;border:2px solid #f59e0b;font-size:13px;font-weight:800;text-align:center;color:#f59e0b'>\u26A0\uFE0F A PRAZO</div>" : "") + "<div style='border-top:2px solid #2D3A8C;margin-top:20px;padding-top:14px;font-size:11px;color:#888;text-align:center'>Obrigado pela prefer\xEAncia!</div>" + "</body></html>";
+  };
+  const imprimirReciboA4 = async s => {
+    const cliente = customers.find(c => c.name === s.customer);
+    const html = htmlReciboA4(s, cliente);
+    const isAndroidNativo = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === "android";
+    if (isAndroidNativo) {
+      try {
+        notify("Gerando PDF do recibo...", "info");
+        await gerarECompartilharPdfA4(html, "recibo-" + s.id.slice(-8) + ".pdf", notify);
+      } catch (e) {
+        console.error("Erro ao gerar/compartilhar PDF do recibo:", e);
+        notify("Não foi possível gerar o arquivo para compartilhar.", "error");
+      }
+      return;
+    }
+    printHTMLDoc(html, "Recibo", "a4");
   };
 
   // Monta o mesmo conteúdo do recibo, só que como PDF de 80mm (em vez de
@@ -15829,11 +15885,16 @@ function PDVApp() {
       borderTop: "1px solid #14161e",
       paddingTop: 8
     }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "relative",
+      flex: 1
+    }
   }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => imprimirRecibo(s),
+    onClick: () => setPrintMenuVendaId(printMenuVendaId === s.id ? null : s.id),
     style: {
       ...S.btn("ghost"),
-      flex: 1,
+      width: "100%",
       justifyContent: "center",
       padding: "7px",
       fontSize: 11
@@ -15841,7 +15902,50 @@ function PDVApp() {
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "printer",
     size: 12
-  }), " ", s.payment === "A Prazo" ? "Recibo + Promissória" : "Recibo"), /*#__PURE__*/React.createElement("button", {
+  }), " ", s.payment === "A Prazo" ? "Recibo + Promissória" : "Recibo"), printMenuVendaId === s.id && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "absolute",
+      bottom: "100%",
+      left: 0,
+      right: 0,
+      marginBottom: 4,
+      background: "var(--bg-card)",
+      border: "1px solid var(--bg-elevated)",
+      borderRadius: 10,
+      boxShadow: "0 4px 16px rgba(0,0,0,.3)",
+      overflow: "hidden",
+      zIndex: 20
+    }
+  }, [["80mm", "\uD83E\uDDFE T\xE9rmica 80mm"], ["termica2", "\uD83D\uDDBC\uFE0F T\xE9rmica 2 (imagem)"], ["a4", "\uD83D\uDCC4 Folha A4"]].map(_refRecMenu => {
+    let val = _refRecMenu[0],
+      label = _refRecMenu[1];
+    return /*#__PURE__*/React.createElement("button", {
+      key: val,
+      onClick: () => {
+        if (val === "80mm") {
+          imprimirRecibo(s);
+        } else if (val === "termica2") {
+          imprimirReciboTermica2(s);
+        } else {
+          imprimirReciboA4(s);
+        }
+        setPrintMenuVendaId(null);
+      },
+      style: {
+        display: "block",
+        width: "100%",
+        textAlign: "left",
+        padding: "9px 12px",
+        background: "none",
+        border: "none",
+        borderBottom: "1px solid var(--bg-elevated)",
+        color: "var(--text-primary)",
+        fontSize: 12,
+        fontFamily: "inherit",
+        cursor: "pointer"
+      }
+    }, label);
+  }))), /*#__PURE__*/React.createElement("button", {
     onClick: () => compartilharRecibo(s),
     style: {
       ...S.btn("ghost"),
@@ -15851,15 +15955,6 @@ function PDVApp() {
       fontSize: 11
     }
   }, "\uD83D\uDCE4 Enviar"), /*#__PURE__*/React.createElement("button", {
-    onClick: () => imprimirReciboThermer(s),
-    style: {
-      ...S.btn("ghost"),
-      flex: 1,
-      justifyContent: "center",
-      padding: "7px",
-      fontSize: 11
-    }
-  }, "\uD83D\uDD35 Thermer"), /*#__PURE__*/React.createElement("button", {
     onClick: () => {
       setEditSale(s);
       setEditSaleForm({
