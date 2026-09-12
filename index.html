@@ -11437,9 +11437,12 @@ function RelatoriosPage(_refRel) {
   })();
 
   // Preço de tabela (atacado) atual de um produto pelo nome
+  // Preço de tabela (atacado) atual de um produto pelo nome — retorna null se o
+  // produto não tiver "Preço Atacado" cadastrado (nunca usa o preço de varejo
+  // como referência, pra não misturar os dois e distorcer o cálculo)
   const precoAtacadoDe = nome => {
     const p = (products || []).find(x => x.name === nome);
-    return p ? +(p.priceAtacado || p.price || 0) : 0;
+    return p && p.priceAtacado ? +p.priceAtacado : null;
   };
 
   // ── ATACADO ── (relatório dedicado: total, produtos e clientes do atacado)
@@ -11462,8 +11465,8 @@ function RelatoriosPage(_refRel) {
         mapaProd[nome].qtd += i.qty || 0;
         mapaProd[nome].fat += (i.price || 0) * (i.qty || 0);
         const precoRef = precoAtacadoDe(nome);
-        const dif = ((i.price || 0) - precoRef) * (i.qty || 0);
-        if (dif > 0) {
+        const dif = precoRef != null ? ((i.price || 0) - precoRef) * (i.qty || 0) : 0;
+        if (precoRef != null && dif > 0) {
           sobrepreco += dif;
           if (!mapaProdSobrepreco[nome]) mapaProdSobrepreco[nome] = {
             nome,
@@ -11494,8 +11497,8 @@ function RelatoriosPage(_refRel) {
       mapaCli[nome].qtd += 1;
       (s.items || []).forEach(i => {
         const precoRef = precoAtacadoDe(i.name);
-        const dif = ((i.price || 0) - precoRef) * (i.qty || 0);
-        if (dif > 0) mapaCli[nome].sobrepreco += dif;
+        const dif = precoRef != null ? ((i.price || 0) - precoRef) * (i.qty || 0) : 0;
+        if (precoRef != null && dif > 0) mapaCli[nome].sobrepreco += dif;
       });
     });
     const clientes = Object.values(mapaCli).sort((a, b) => b.total - a.total);
@@ -11505,8 +11508,8 @@ function RelatoriosPage(_refRel) {
       let sobreprecoVenda = 0;
       (s.items || []).forEach(i => {
         const precoRef = precoAtacadoDe(i.name);
-        const dif = ((i.price || 0) - precoRef) * (i.qty || 0);
-        if (dif > 0) sobreprecoVenda += dif;
+        const dif = precoRef != null ? ((i.price || 0) - precoRef) * (i.qty || 0) : 0;
+        if (precoRef != null && dif > 0) sobreprecoVenda += dif;
       });
       return {
         id: s.id,
