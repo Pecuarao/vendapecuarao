@@ -6068,6 +6068,7 @@ function AtacadoPage(_ref19) {
       name: i.name,
       qty: i.qty,
       price: i.precoUnit * (1 - (i.descItem || 0) / 100),
+      precoTabela: +(i.priceAtacado || 0) || null,
       comissaoProd: i.comissaoProd || 0,
       comissaoItem: calcComissaoItem(i)
     }));
@@ -7095,12 +7096,12 @@ function ListaComprasPage(_ref20) {
   // adicionados no celular nunca apareceriam no PC. Com cooldown de 60s pra
   // não bater no Supabase toda vez que o usuário só troca de aba.
   const _listaSyncRef = useRef(false);
-  useEffect(() => {
-    if (_listaSyncRef.current) return;
-    _listaSyncRef.current = true;
-    const _ultimaSincroniaLista = parseInt(localStorage.getItem("_last_lista_sync") || "0", 10);
-    if (Date.now() - _ultimaSincroniaLista < 60000) return;
-    syncLoadTable("lista_compras").then(rows => {
+  const sincronizarLista = forcar => {
+    if (!forcar) {
+      const _ultimaSincroniaLista = parseInt(localStorage.getItem("_last_lista_sync") || "0", 10);
+      if (Date.now() - _ultimaSincroniaLista < 60000) return Promise.resolve();
+    }
+    return syncLoadTable("lista_compras").then(rows => {
       if (!Array.isArray(rows)) return;
       const doServidor = rows.map(r => ({
         id: r.id,
@@ -7115,13 +7116,22 @@ function ListaComprasPage(_ref20) {
         createdAt: r.created_at || Date.now()
       }));
       localStorage.setItem("_last_lista_sync", String(Date.now()));
-      const tomb = new Set((getTombstones()["lista_compras"] || []));
+      const tomb = new Set(getTombstones()["lista_compras"] || []);
       setItems(prev => {
-        const merged = mergeById(prev, doServidor, tomb);
+        // "lista_compras" é passado aqui como 4º argumento (col) — faltava
+        // antes, o que fazia itens apagados em outro aparelho nunca sumirem
+        // daqui (ficavam "fantasmas" pra sempre, e a lista parecia travada
+        // sempre com os mesmos itens).
+        const merged = mergeById(prev, doServidor, tomb, "lista_compras");
         save("pdv_lista_compras", merged);
         return merged;
       });
     });
+  };
+  useEffect(() => {
+    if (_listaSyncRef.current) return;
+    _listaSyncRef.current = true;
+    sincronizarLista(false);
   }, []);
   const addItem = () => {
     var _inputRef$current2;
@@ -7394,7 +7404,22 @@ function ListaComprasPage(_ref20) {
       fontSize: 13,
       color: "var(--text-secondary)"
     }
-  }, totalOk, "/", items.length, " recebidos"), totalOk > 0 && /*#__PURE__*/React.createElement("button", {
+  }, totalOk, "/", items.length, " recebidos"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      notify("Atualizando lista...", "info");
+      sincronizarLista(true).then(() => notify("Lista atualizada ✓"));
+    },
+    style: {
+      ...S.btn("ghost"),
+      padding: "6px 12px",
+      fontSize: 12
+    }
+  }, "\uD83D\uDD04 Atualizar"), totalOk > 0 && /*#__PURE__*/React.createElement("button", {
     onClick: () => {
       persist(items.filter(i => i.fase !== "recebido" && i.fase !== "comprado"));
       notify("Recebidos e comprados removidos.", "warn");
@@ -7404,7 +7429,7 @@ function ListaComprasPage(_ref20) {
       padding: "6px 12px",
       fontSize: 12
     }
-  }, "Limpar \u2705")), items.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "Limpar \u2705"))), items.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       height: 5,
       background: "var(--bg-elevated)",
@@ -11464,7 +11489,7 @@ function RelatoriosPage(_refRel) {
         };
         mapaProd[nome].qtd += i.qty || 0;
         mapaProd[nome].fat += (i.price || 0) * (i.qty || 0);
-        const precoRef = precoAtacadoDe(nome);
+        const precoRef = i.precoTabela != null ? +i.precoTabela : precoAtacadoDe(nome);
         const dif = precoRef != null ? ((i.price || 0) - precoRef) * (i.qty || 0) : 0;
         if (precoRef != null && dif > 0) {
           sobrepreco += dif;
@@ -11496,7 +11521,7 @@ function RelatoriosPage(_refRel) {
       mapaCli[nome].total += s.total || 0;
       mapaCli[nome].qtd += 1;
       (s.items || []).forEach(i => {
-        const precoRef = precoAtacadoDe(i.name);
+        const precoRef = i.precoTabela != null ? +i.precoTabela : precoAtacadoDe(i.name);
         const dif = precoRef != null ? ((i.price || 0) - precoRef) * (i.qty || 0) : 0;
         if (precoRef != null && dif > 0) mapaCli[nome].sobrepreco += dif;
       });
@@ -11507,7 +11532,7 @@ function RelatoriosPage(_refRel) {
     const vendasSobrepreco = vendasAtacado.map(s => {
       let sobreprecoVenda = 0;
       (s.items || []).forEach(i => {
-        const precoRef = precoAtacadoDe(i.name);
+        const precoRef = i.precoTabela != null ? +i.precoTabela : precoAtacadoDe(i.name);
         const dif = precoRef != null ? ((i.price || 0) - precoRef) * (i.qty || 0) : 0;
         if (precoRef != null && dif > 0) sobreprecoVenda += dif;
       });
@@ -11773,7 +11798,7 @@ function RelatoriosPage(_refRel) {
       corpo = relAtacado.vendasSobrepreco.length === 0 ? "<p style='font-size:13px;color:#888'>Nenhuma venda de atacado acima do preço de tabela no período.</p>" : relAtacado.vendasSobrepreco.map(v => "<div style='padding:8px 0;border-bottom:1px solid #eee;font-size:12px'>" + "<b>" + v.customer + "</b> <span style='color:#888'>· " + v.date + " " + v.time + "</span><br>" + "<span style='color:#666'>" + v.items.map(it => (it.qty || 0) + "x " + it.name).join(", ") + "</span><br>" + "Valor do pedido: <b>" + fmt(v.total) + "</b> &nbsp;·&nbsp; A mais: <b style='color:#16a34a'>" + fmt(v.sobreprecoVenda) + "</b>" + "</div>").join("") + "<table style='width:100%;border-collapse:collapse;margin-top:14px;border-top:2px solid #333'><tr><td " + td + "><b>Total vendido a mais</b></td><td " + tdR + "><b>" + fmt(relAtacado.sobrepreco) + "</b></td></tr></table>";
     } else if (tipo === "atacado") {
       titulo = "Relatório de Atacado";
-      corpo = "<table style='width:100%;border-collapse:collapse'>" + "<tr><td " + td + ">Total vendido</td><td " + tdR + "><b>" + fmt(relAtacado.total) + "</b></td></tr>" + "<tr><td " + td + ">Quantidade de vendas</td><td " + tdR + ">" + relAtacado.qtd + "</td></tr>" + "<tr><td " + td + ">Ticket médio</td><td " + tdR + ">" + fmt(relAtacado.ticket) + "</td></tr>" + "</table>" + "<h3 style='margin:18px 0 8px;font-size:14px'>Produtos mais vendidos</h3>" + "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Produto</th><th " + th + " style='text-align:center'>Qtd</th><th " + th + " style='text-align:right'>Faturamento</th></tr>" + relAtacado.produtos.map(p => "<tr><td " + td + ">" + p.nome + "</td><td " + tdC + ">" + p.qtd + "</td><td " + tdR + ">" + fmt(p.fat) + "</td></tr>").join("") + "</table>" + (relAtacado.vendasSobrepreco.length > 0 ? "<h3 style='margin:18px 0 8px;font-size:14px'>Pedidos vendidos acima da tabela</h3>" + relAtacado.vendasSobrepreco.map(v => "<div style='padding:8px 0;border-bottom:1px solid #eee;font-size:12px'>" + "<b>" + v.customer + "</b> <span style='color:#888'>· " + v.date + " " + v.time + "</span><br>" + "<span style='color:#666'>" + v.items.map(it => (it.qty || 0) + "x " + it.name).join(", ") + "</span><br>" + "Valor do pedido: <b>" + fmt(v.total) + "</b> &nbsp;·&nbsp; A mais: <b style='color:#16a34a'>" + fmt(v.sobreprecoVenda) + "</b>" + "</div>").join("") : "") + "<h3 style='margin:18px 0 8px;font-size:14px'>Clientes</h3>" + "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Cliente</th><th " + th + " style='text-align:center'>Compras</th><th " + th + " style='text-align:right'>Total</th></tr>" + relAtacado.clientes.map(c => "<tr><td " + td + ">" + c.nome + "</td><td " + tdC + ">" + c.qtd + "</td><td " + tdR + ">" + fmt(c.total) + "</td></tr>").join("") + "</table>" + "<table style='width:100%;border-collapse:collapse;margin-top:14px;border-top:2px solid #333'><tr><td " + td + "><b>Total vendido a mais</b></td><td " + tdR + "><b>" + fmt(relAtacado.sobrepreco) + "</b></td></tr></table>";
+      corpo = "<table style='width:100%;border-collapse:collapse'>" + "<tr><td " + td + ">Total vendido</td><td " + tdR + "><b>" + fmt(relAtacado.total) + "</b></td></tr>" + "<tr><td " + td + ">Quantidade de vendas</td><td " + tdR + ">" + relAtacado.qtd + "</td></tr>" + "<tr><td " + td + ">Ticket médio</td><td " + tdR + ">" + fmt(relAtacado.ticket) + "</td></tr>" + "</table>" + "<h3 style='margin:18px 0 8px;font-size:14px'>Produtos mais vendidos</h3>" + "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Produto</th><th " + th + " style='text-align:center'>Qtd</th><th " + th + " style='text-align:right'>Faturamento</th></tr>" + relAtacado.produtos.map(p => "<tr><td " + td + ">" + p.nome + "</td><td " + tdC + ">" + p.qtd + "</td><td " + tdR + ">" + fmt(p.fat) + "</td></tr>").join("") + "</table>" + "<h3 style='margin:18px 0 8px;font-size:14px'>Clientes</h3>" + "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Cliente</th><th " + th + " style='text-align:center'>Compras</th><th " + th + " style='text-align:right'>Total</th></tr>" + relAtacado.clientes.map(c => "<tr><td " + td + ">" + c.nome + "</td><td " + tdC + ">" + c.qtd + "</td><td " + tdR + ">" + fmt(c.total) + "</td></tr>").join("") + "</table>";
     } else if (tipo === "produtos") {
       titulo = "Produtos — Retorno no Período";
       const ord = [...relProdutos].sort((a, b) => b.lucro - a.lucro);
@@ -12268,48 +12293,7 @@ function renderRelatorioConteudo(tipo, d) {
         color: "#E8682A",
         margin: "14px 0 4px"
       }
-    }, "🏆 Produtos mais vendidos"), a.produtos.slice(0, 10).map((p, i) => linha((i + 1) + ". " + p.nome, p.qtd + " un · " + fmt(p.fat), i === 0 ? "#f59e0b" : null)), a.vendasSobrepreco.length > 0 && /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 12,
-        fontWeight: 700,
-        color: "#4ade80",
-        margin: "14px 0 4px"
-      }
-    }, "💵 Pedidos vendidos acima da tabela"), a.vendasSobrepreco.length > 0 && a.vendasSobrepreco.map((v, i) => /*#__PURE__*/React.createElement("div", {
-      key: v.id || i,
-      style: {
-        padding: "10px 0",
-        borderBottom: "1px solid var(--bg-elevated)"
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 13,
-        fontWeight: 700
-      }
-    }, v.customer, /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontWeight: 400,
-        color: "var(--text-secondary)",
-        fontSize: 11
-      }
-    }, " \xB7 ", v.date, " ", v.time)), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 11,
-        color: "var(--text-secondary)",
-        margin: "3px 0"
-      }
-    }, v.items.map(it => (it.qty || 0) + "x " + it.name).join(", ")), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 12,
-        marginTop: 3
-      }
-    }, "Valor do pedido: ", /*#__PURE__*/React.createElement("b", null, fmt(v.total))), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 12,
-        color: "#4ade80",
-        fontWeight: 700
-      }
-    }, "A mais: ", fmt(v.sobreprecoVenda)))), /*#__PURE__*/React.createElement("div", {
+    }, "🏆 Produtos mais vendidos"), a.produtos.slice(0, 10).map((p, i) => linha((i + 1) + ". " + p.nome, p.qtd + " un · " + fmt(p.fat), i === 0 ? "#f59e0b" : null)), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 12,
         fontWeight: 700,
@@ -12321,13 +12305,7 @@ function renderRelatorioConteudo(tipo, d) {
         fontSize: 12,
         color: "var(--text-secondary)"
       }
-    }, "—") : a.clientes.slice(0, 10).map((c, i) => linha((i + 1) + ". " + c.nome + " (" + c.qtd + ")", fmt(c.total), i === 0 ? "#f59e0b" : null)), /*#__PURE__*/React.createElement("div", {
-      style: {
-        marginTop: 14,
-        paddingTop: 10,
-        borderTop: "2px solid var(--bg-elevated)"
-      }
-    }, linha("Total vendido a mais", fmt(a.sobrepreco), "#4ade80")));
+    }, "—") : a.clientes.slice(0, 10).map((c, i) => linha((i + 1) + ". " + c.nome + " (" + c.qtd + ")", fmt(c.total), i === 0 ? "#f59e0b" : null)));
   }
   if (tipo === "lucro") {
     const l = d.relLucro;
