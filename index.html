@@ -1162,11 +1162,25 @@ async function syncDeleteOne(col, id) {
   const key = _SB_KEY();
   if (!key || !id) return false;
   try {
+    // Prefer: return=representation faz o Supabase devolver as linhas
+    // realmente apagadas. Isso é necessário porque, com RLS, um DELETE
+    // que não bate com a política de segurança retorna sucesso (200/204)
+    // mesmo sem apagar nada — sem checar o corpo da resposta, o app
+    // achava que tinha apagado e liberava o item pra "voltar" na próxima
+    // sincronização.
     const r = await fetch(SUPABASE_URL + '/rest/v1/' + col + '?id=eq.' + encodeURIComponent(id), {
       method: 'DELETE',
-      headers: _SB_H()
+      headers: {
+        ..._SB_H(),
+        Prefer: 'return=representation'
+      }
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
+    const apagados = await r.json().catch(() => null);
+    if (Array.isArray(apagados) && apagados.length === 0) {
+      console.warn('[PDV] syncDeleteOne: nenhuma linha apagada (RLS?):', col, id);
+      return false;
+    }
     return true;
   } catch (e) {
     console.warn('[PDV] syncDeleteOne falhou:', col, id, e.message);
