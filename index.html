@@ -7096,12 +7096,23 @@ function ListaComprasPage(_ref20) {
   const persist = v => {
     // Envia só os itens que mudaram, em vez da lista inteira.
     const antMap = new Map((items || []).map(x => [x.id, x]));
+    const novoMap = new Map((v || []).map(x => [x.id, x]));
     const alterados = (v || []).filter(i => {
       if (!i || i.id == null) return false;
       const antes = antMap.get(i.id);
       return !antes || JSON.stringify(antes) !== JSON.stringify(i);
     });
+    // Itens que existiam antes e não existem mais em v precisam ser
+    // apagados no servidor também — sem isso, botões como "Limpar" só
+    // removiam da tela local, e o item voltava no próximo sync.
+    const removidos = (items || []).filter(i => i && i.id != null && !novoMap.has(i.id));
     if (alterados.length > 20) syncSave("lista_compras", alterados);else alterados.forEach(i => syncSaveOne("lista_compras", i));
+    removidos.forEach(i => {
+      addTombstone("lista_compras", i.id);
+      syncDeleteOne("lista_compras", i.id).then(ok => {
+        if (ok) clearTombstone("lista_compras", i.id);
+      });
+    });
     setItems(v);
     save("pdv_lista_compras", v);
   };
