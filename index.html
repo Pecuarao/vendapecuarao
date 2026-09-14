@@ -13654,6 +13654,13 @@ function PDVApp() {
     }));
     return map;
   }, [sales]);
+  const gastoPorCliente = useMemo(() => {
+    const map = {};
+    (sales || []).forEach(s => {
+      map[s.customer] = (map[s.customer] || 0) + (s.total || 0);
+    });
+    return map;
+  }, [sales]);
   const filtProd = useMemo(() => products.filter(p => (filterCat === "Todos" || p.category === filterCat) && p.name.toLowerCase().includes(searchProd.toLowerCase())), [products, filterCat, searchProd]);
   const filtProdSorted = useMemo(() => {
     let list = filtProd.filter(p => {
@@ -15681,8 +15688,8 @@ function PDVApp() {
     return c.name.toLowerCase().includes(q) || (c.phone || "").includes(searchCust) || (c.cpf || "").includes(searchCust);
   }).sort((a, b) => {
     if (cliOrdenar === "nome") return a.name.localeCompare(b.name);
-    if (cliOrdenar === "recente") return (b.lastVisit || 0) > (a.lastVisit || 0) ? 1 : -1;
-    if (cliOrdenar === "gasto") return (b.totalGasto || 0) - (a.totalGasto || 0);
+    if (cliOrdenar === "recente") return (b.lastVisit || "") > (a.lastVisit || "") ? 1 : -1;
+    if (cliOrdenar === "gasto") return (gastoPorCliente[b.name] || 0) - (gastoPorCliente[a.name] || 0);
     return 0;
   }).map(c => /*#__PURE__*/React.createElement("div", {
     key: c.id,
