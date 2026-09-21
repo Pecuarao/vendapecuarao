@@ -926,8 +926,10 @@ const _toRow = {
     endereco: e.endereco || '',
     itens: e.itens || [],
     total: +(e.total || 0),
+    desconto: +(e.desconto || 0),
     status: e.status || 'pedido',
-    pagamento: e.pagamento || 'pago',
+    pagamento: e.pagamento || 'receber_entrega',
+    tipo: e.tipo || 'pdv',
     is_prazo: e.isPrazo || false,
     obs: e.obs || '',
     venda_id: e.vendaId || null,
@@ -4739,9 +4741,12 @@ function CartDrawer(_ref18) {
     setSaleCustomer = _ref18.setSaleCustomer,
     salePayment = _ref18.salePayment,
     setSalePayment = _ref18.setSalePayment,
+    saleDesconto = _ref18.saleDesconto,
+    setSaleDesconto = _ref18.setSaleDesconto,
     chgQty = _ref18.chgQty,
     rmCart = _ref18.rmCart,
     cartTotal = _ref18.cartTotal,
+    cartTotalFinal = _ref18.cartTotalFinal,
     onFinalize = _ref18.onFinalize,
     onFinalizeEntrega = _ref18.onFinalizeEntrega,
     onCadastrarCliente = _ref18.onCadastrarCliente,
@@ -4795,6 +4800,10 @@ function CartDrawer(_ref18) {
     _useState64 = _slicedToArray(_useState63, 2),
     editQty = _useState64[0],
     setEditQty = _useState64[1];
+  const _useStateEditObs = useState(""),
+    _useStateEditObs2 = _slicedToArray(_useStateEditObs, 2),
+    editObs = _useStateEditObs2[0],
+    setEditObs = _useStateEditObs2[1];
   const _useState65 = useState(""),
     _useState66 = _slicedToArray(_useState65, 2),
     editTotal = _useState66[0],
@@ -4840,6 +4849,7 @@ function CartDrawer(_ref18) {
     setEditPreco(String(item.price));
     setEditQty(String(item.qty));
     setEditTotal(String(+(item.price * item.qty).toFixed(2)));
+    setEditObs(item.obs || "");
     setModoTotal(false);
     setAtualizarPrecoCadastro(false);
   };
@@ -4862,7 +4872,8 @@ function CartDrawer(_ref18) {
     chgQty(editItem, 0, {
       name: novoNome || undefined,
       price: p,
-      qty: q
+      qty: q,
+      obs: editObs.trim()
     });
     if (orig && onUpdateProduct && atualizarPrecoCadastro) {
       const changed = novoNome && novoNome !== orig.name || p !== orig.price;
@@ -4978,6 +4989,23 @@ function CartDrawer(_ref18) {
     },
     value: editNome,
     onChange: e => setEditNome(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.lbl,
+      marginBottom: 4
+    }
+  }, "Obs (ex: areia m\xE9dia fina)"), /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...S.input,
+      fontSize: 13
+    },
+    placeholder: "Observa\xE7\xE3o do item (opcional)",
+    value: editObs,
+    onChange: e => setEditObs(e.target.value)
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 8
@@ -5207,7 +5235,15 @@ function CartDrawer(_ref18) {
       textOverflow: "ellipsis",
       whiteSpace: "nowrap"
     }
-  }, item.name), /*#__PURE__*/React.createElement("div", {
+  }, item.name), item.obs && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "var(--text-secondary)",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap"
+    }
+  }, "\uD83D\uDCDD ", item.obs), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       color: "#E8682A"
@@ -5540,7 +5576,56 @@ function CartDrawer(_ref18) {
       display: "flex",
       justifyContent: "space-between",
       alignItems: "center",
-      marginBottom: 14
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "#7a7d8e",
+      fontSize: 13
+    }
+  }, "Subtotal"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 14,
+      color: "#7a7d8e"
+    }
+  }, fmt(cartTotal))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 14,
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "#7a7d8e",
+      fontSize: 13
+    }
+  }, "Desconto (R$)"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "0.01",
+    min: "0",
+    placeholder: "0,00",
+    value: saleDesconto || "",
+    onChange: e => {
+      const v = parseFloat(e.target.value);
+      setSaleDesconto(isNaN(v) || v < 0 ? 0 : v);
+    },
+    style: {
+      ...S.input,
+      width: 110,
+      textAlign: "right",
+      padding: "6px 8px",
+      fontSize: 14
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 14,
+      paddingTop: 10,
+      borderTop: "1px solid #1a1c26"
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
@@ -5552,7 +5637,7 @@ function CartDrawer(_ref18) {
       fontWeight: 800,
       color: "#4ade80"
     }
-  }, fmt(cartTotal))), isEntrega ? /*#__PURE__*/React.createElement("button", {
+  }, fmt(cartTotalFinal))), isEntrega ? /*#__PURE__*/React.createElement("button", {
     onClick: handleEntrega,
     disabled: isAvulso && !avNome.trim(),
     style: {
@@ -5985,7 +6070,7 @@ function AtacadoPage(_ref19) {
     _useState98 = _slicedToArray(_useState97, 2),
     obs = _useState98[0],
     setObs = _useState98[1];
-  const _useState99 = useState("pago"),
+  const _useState99 = useState("receber_entrega"),
     _useState100 = _slicedToArray(_useState99, 2),
     pagamento = _useState100[0],
     setPagamento = _useState100[1];
@@ -6141,6 +6226,7 @@ function AtacadoPage(_ref19) {
       endereco: enderecoEntrega,
       itens: saleItems,
       total,
+      desconto: +(subtotal - total).toFixed(2),
       obs: avObs || obs,
       pagamento,
       status: "pedido",
@@ -6157,7 +6243,7 @@ function AtacadoPage(_ref19) {
     setCliente("Avulso");
     setDesconto(0);
     setObs("");
-    setPagamento("pago");
+    setPagamento("receber_entrega");
     setAvNome("");
     setAvRua("");
     setAvNum("");
@@ -9332,7 +9418,7 @@ function EntregasPage(_ref24) {
       endereco: "",
       obs: "",
       vendaId: "",
-      pagamento: "pago"
+      pagamento: "receber_entrega"
     }),
     _useState150 = _slicedToArray(_useState149, 2),
     nForm = _useState150[0],
@@ -9533,13 +9619,15 @@ function EntregasPage(_ref24) {
       const larguraMm = modo === "110mm" ? 110 : isTermica2 ? 92 : 80;
       const fsTerm = isTermica2 ? 20 : 16;
       const pgLabelTerm = pgLabel.replace(/[\u{1F300}-\u{1FAFF}\u2600-\u27BF]/gu, "").trim();
-      const itemRowsTerm = (ped.itens || []).map(i => "<div class='item'><span>" + i.qty + "x " + i.name + "</span><span>" + fmt(i.price * i.qty) + "</span></div>").join("");
+      const itemRowsTerm = (ped.itens || []).map(i => "<div class='item'><span>" + i.qty + "x " + i.name + "</span><span>" + fmt(i.price * i.qty) + "</span></div>" + (i.obs ? "<div class='sub' style='margin:-1px 0 2px'>\uD83D\uDCDD " + i.obs + "</div>" : "")).join("");
+      const subtotalLinhaTerm = ped.desconto > 0 ? "<div class='item'><span>Subtotal</span><span>" + fmt(ped.total + ped.desconto) + "</span></div>" + "<div class='item'><span>Desconto</span><span>-" + fmt(ped.desconto) + "</span></div>" : "";
       const cssTerm = "@page{size:" + larguraMm + "mm auto;margin:0}" + "*{box-sizing:border-box}" + "body{font-family:Arial,Helvetica,sans-serif;width:" + (larguraMm - 4) + "mm;margin:0 auto;padding:2mm;color:#000;font-size:" + fsTerm + "px;font-weight:400}" + "hr{border:none;border-top:1px dashed #000;margin:6px 0}" + ".center{text-align:center}" + ".b{font-weight:400}" + ".titulo{font-size:" + fsTerm + "px;font-weight:700;letter-spacing:1px}" + ".sub{font-size:11px}" + ".item{display:flex;justify-content:space-between;gap:6px;margin:2px 0;font-size:" + fsTerm + "px}" + ".total{display:flex;justify-content:space-between;font-size:" + fsTerm + "px;font-weight:400;margin-top:6px}" + ".box{border:1px solid #000;padding:4px;margin:6px 0;text-align:center;font-weight:400;font-size:" + fsTerm + "px}" + "@media print{body{width:" + (larguraMm - 4) + "mm}}";
-      html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + ped.numero + "</title><style>" + cssTerm + "</style></head><body>" + "<div class='center'>" + "<div class='titulo'>PEDIDO DE ENTREGA</div>" + "<div class='sub'>" + ped.numero + " · " + ped.criadoData + " " + ped.criadoHora + "</div>" + "</div>" + "<hr>" + "<div><span class='b'>Status:</span> " + st.label + "</div>" + "<div><span class='b'>Cliente:</span> " + ped.cliente + "</div>" + (ped.telefone ? "<div><span class='b'>Tel:</span> " + ped.telefone + "</div>" : "") + (ped.endereco ? "<div><span class='b'>End:</span> " + ped.endereco + "</div>" : "") + "<hr>" + itemRowsTerm + "<hr>" + "<div class='total'><span>TOTAL</span><span>" + fmt(ped.total) + "</span></div>" + (pgLabelTerm ? "<div class='box'>" + pgLabelTerm + "</div>" : "") + (ped.obs ? "<hr><div><span class='b'>Obs:</span> " + ped.obs + "</div>" : "") + "<hr>" + "<div style='margin-top:14px;white-space:nowrap'>Assinatura: ______________________</div>" + "<div class='center' style='margin-top:16px'></div>" + "</body></html>";
+      html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + ped.numero + "</title><style>" + cssTerm + "</style></head><body>" + "<div class='center'>" + "<div class='titulo'>PEDIDO DE ENTREGA</div>" + "<div class='sub'>" + ped.numero + " · " + ped.criadoData + " " + ped.criadoHora + "</div>" + "</div>" + "<hr>" + "<div><span class='b'>Status:</span> " + st.label + "</div>" + "<div><span class='b'>Cliente:</span> " + ped.cliente + "</div>" + (ped.telefone ? "<div><span class='b'>Tel:</span> " + ped.telefone + "</div>" : "") + (ped.endereco ? "<div><span class='b'>End:</span> " + ped.endereco + "</div>" : "") + "<hr>" + itemRowsTerm + "<hr>" + subtotalLinhaTerm + "<div class='total'><span>TOTAL</span><span>" + fmt(ped.total) + "</span></div>" + (pgLabelTerm ? "<div class='box'>" + pgLabelTerm + "</div>" : "") + (ped.obs ? "<hr><div><span class='b'>Obs:</span> " + ped.obs + "</div>" : "") + "<hr>" + "<div style='margin-top:14px;white-space:nowrap'>Assinatura: ______________________</div>" + "<div class='center' style='margin-top:16px'></div>" + "</body></html>";
     } else {
-      const itemRows = (ped.itens || []).map(i => "<tr><td>" + i.name + "</td><td style='text-align:center'>" + i.qty + "x</td><td style='text-align:right;font-weight:600'>" + fmt(i.price * i.qty) + "</td></tr>").join("");
+      const itemRows = (ped.itens || []).map(i => "<tr><td>" + i.name + (i.obs ? "<div style='font-size:10px;color:#888;margin-top:2px'>\uD83D\uDCDD " + i.obs + "</div>" : "") + "</td><td style='text-align:center'>" + i.qty + "x</td><td style='text-align:right;font-weight:600'>" + fmt(i.price * i.qty) + "</td></tr>").join("");
       const css = "@page{margin:0}*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}body{font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;color:#111;}table{width:100%;border-collapse:collapse;font-size:12px;}th{background:#f3f4f6;padding:6px;text-align:left;font-size:10px;text-transform:uppercase;}td{padding:6px;border-bottom:1px solid #f3f4f6;}.total{font-size:16px;font-weight:800;text-align:right;margin-top:10px;color:#2D3A8C;}@media print{body{max-width:100%;padding:8px}}";
-      html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + ped.numero + "</title><style>" + css + "</style></head><body>" + "<div style='background:#2D3A8C;color:#fff;padding:14px;border-radius:8px;margin-bottom:16px;display:flex;align-items:center;gap:12px'>" + "<img src='" + LOGO_SRC + "' alt='logo' style='height:40px;flex-shrink:0'/>" + "<div style='text-align:left'>" + "<div style='font-size:15px;font-weight:800;letter-spacing:1px'>PEDIDO DE ENTREGA</div>" + "<div style='font-size:11px;margin-top:3px;opacity:.85'>" + ped.numero + " · " + ped.criadoData + " " + ped.criadoHora + "</div>" + "</div>" + "</div>" + "<div style='background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-bottom:12px;font-size:12px'>" + "<div style='display:flex;justify-content:space-between;margin-bottom:4px'>" + "<span><b>Status:</b> " + st.emoji + " " + st.label + "</span>" + "<span><b>Total:</b> <span style='color:#2D3A8C;font-weight:800'>" + fmt(ped.total) + "</span></span></div>" + "<b>Cliente:</b> " + ped.cliente + (ped.telefone ? " · 📞" + ped.telefone : "") + "<br>" + (ped.endereco ? "<b>Endereço:</b> 📍" + ped.endereco + "<br>" : "") + "</div>" + "<table><thead><tr><th>Produto</th><th style='text-align:center'>Qtd</th><th style='text-align:right'>Valor</th></tr></thead><tbody>" + itemRows + "</tbody></table>" + "<div class='total'>TOTAL: " + fmt(ped.total) + "</div>" + (pgLabel ? "<div style='margin-top:10px;padding:10px;border-radius:6px;border:2px solid " + pgColor + ";font-size:13px;font-weight:800;text-align:center;color:" + pgColor + "'>" + pgLabel + "</div>" : "") + (ped.obs ? "<div style='background:#fffbeb;border:1px solid #fef08a;padding:8px;border-radius:6px;font-size:12px;margin-top:8px'><b>Obs:</b> " + ped.obs + "</div>" : "") + "<div style='border-top:2px solid #2D3A8C;margin-top:20px;padding-top:14px;font-size:11px;color:#888;text-align:center'>" + "Assinatura do recebedor: _______________________________<br><br>Data: _____ / _____ / _______" + "</div>" + "</body></html>";
+      const subtotalLinha = ped.desconto > 0 ? "<div style='font-size:12px;text-align:right;color:#666'>Subtotal: " + fmt(ped.total + ped.desconto) + "</div>" + "<div style='font-size:12px;text-align:right;color:#e74c3c'>Desconto: -" + fmt(ped.desconto) + "</div>" : "";
+      html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + ped.numero + "</title><style>" + css + "</style></head><body>" + "<div style='background:#2D3A8C;color:#fff;padding:14px;border-radius:8px;margin-bottom:16px;display:flex;align-items:center;gap:12px'>" + "<img src='" + LOGO_SRC + "' alt='logo' style='height:40px;flex-shrink:0'/>" + "<div style='text-align:left'>" + "<div style='font-size:15px;font-weight:800;letter-spacing:1px'>PEDIDO DE ENTREGA</div>" + "<div style='font-size:11px;margin-top:3px;opacity:.85'>" + ped.numero + " · " + ped.criadoData + " " + ped.criadoHora + "</div>" + "</div>" + "</div>" + "<div style='background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-bottom:12px;font-size:12px'>" + "<div style='display:flex;justify-content:space-between;margin-bottom:4px'>" + "<span><b>Status:</b> " + st.emoji + " " + st.label + "</span>" + "<span><b>Total:</b> <span style='color:#2D3A8C;font-weight:800'>" + fmt(ped.total) + "</span></span></div>" + "<b>Cliente:</b> " + ped.cliente + (ped.telefone ? " · 📞" + ped.telefone : "") + "<br>" + (ped.endereco ? "<b>Endereço:</b> 📍" + ped.endereco + "<br>" : "") + "</div>" + "<table><thead><tr><th>Produto</th><th style='text-align:center'>Qtd</th><th style='text-align:right'>Valor</th></tr></thead><tbody>" + itemRows + "</tbody></table>" + subtotalLinha + "<div class='total'>TOTAL: " + fmt(ped.total) + "</div>" + (pgLabel ? "<div style='margin-top:10px;padding:10px;border-radius:6px;border:2px solid " + pgColor + ";font-size:13px;font-weight:800;text-align:center;color:" + pgColor + "'>" + pgLabel + "</div>" : "") + (ped.obs ? "<div style='background:#fffbeb;border:1px solid #fef08a;padding:8px;border-radius:6px;font-size:12px;margin-top:8px'><b>Obs:</b> " + ped.obs + "</div>" : "") + "<div style='border-top:2px solid #2D3A8C;margin-top:20px;padding-top:14px;font-size:11px;color:#888;text-align:center'>" + "Assinatura do recebedor: _______________________________<br><br>Data: _____ / _____ / _______" + "</div>" + "</body></html>";
     }
     const isAndroidNativo = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === "android";
     if (modo === "termica2") {
@@ -10243,7 +10331,8 @@ function EntregasPage(_ref24) {
         telefone: "",
         endereco: "",
         obs: "",
-        vendaId: ""
+        vendaId: "",
+        pagamento: "receber_entrega"
       });
     }
   }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
@@ -10265,7 +10354,8 @@ function EntregasPage(_ref24) {
         telefone: "",
         endereco: "",
         obs: "",
-        vendaId: ""
+        vendaId: "",
+        pagamento: "receber_entrega"
       });
     }
   }, /*#__PURE__*/React.createElement(Icon, {
@@ -10481,7 +10571,7 @@ function EntregasPage(_ref24) {
           items: [...f.items, {
             name: p.name,
             qty: 1,
-            price: +(p.price || 0),
+            price: +((editPed && editPed.tipo === "atacado" ? p.priceAtacado || p.price : p.price) || 0),
             cost: +(p.costPrice || 0)
           }]
         };
@@ -12728,6 +12818,10 @@ function PDVApp() {
     _useState196 = _slicedToArray(_useState195, 2),
     salePayment = _useState196[0],
     setSalePayment = _useState196[1];
+  const _useStateSaleDesc = useState(0),
+    _useStateSaleDesc2 = _slicedToArray(_useStateSaleDesc, 2),
+    saleDesconto = _useStateSaleDesc2[0],
+    setSaleDesconto = _useStateSaleDesc2[1];
   const _useState197 = useState(false),
     _useState198 = _slicedToArray(_useState197, 2),
     cartOpen = _useState198[0],
@@ -13128,7 +13222,8 @@ function PDVApp() {
       ...i,
       name: override.name || i.name,
       price: override.price != null ? override.price : i.price,
-      qty: Math.max(0.001, override.qty != null ? override.qty : i.qty + d)
+      qty: Math.max(0.001, override.qty != null ? override.qty : i.qty + d),
+      obs: override.obs != null ? override.obs : i.obs
     };
     return {
       ...i,
@@ -13136,6 +13231,7 @@ function PDVApp() {
     };
   }));
   const cartTotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
+  const cartTotalFinal = Math.max(0, cartTotal - (saleDesconto || 0));
   const cartCount = cart.reduce((s, i) => s + i.qty, 0);
   const doFinalizeSale = function () {
     let criarEntrega = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : false;
@@ -13156,9 +13252,11 @@ function PDVApp() {
         name: i.name,
         qty: i.qty,
         price: i.price,
-        cost: i.costPrice || 0
+        cost: i.costPrice || 0,
+        obs: i.obs || ""
       })),
-      total: cartTotal,
+      total: cartTotalFinal,
+      desconto: saleDesconto || 0,
       payment: salePayment,
       date: todayStr(),
       time: nowTime(),
@@ -13192,7 +13290,7 @@ function PDVApp() {
     if (saleCustomer !== "Avulso") persistC(customers.map(c => c.name === saleCustomer ? {
       ...c,
       purchases: c.purchases + 1,
-      totalSpent: c.totalSpent + cartTotal,
+      totalSpent: c.totalSpent + cartTotalFinal,
       lastVisit: todayStr()
     } : c));
     if (criarEntrega) {
@@ -13207,11 +13305,14 @@ function PDVApp() {
         itens: cart.map(i => ({
           name: i.name,
           qty: i.qty,
-          price: i.price
+          price: i.price,
+          obs: i.obs || ""
         })),
-        total: cartTotal,
+        total: cartTotalFinal,
+        desconto: saleDesconto || 0,
         obs: obsEntrega || "",
         status: "pedido",
+        pagamento: "receber_entrega",
         isPrazo: salePayment === "A Prazo",
         criadoEm: Date.now(),
         criadoData: todayStr(),
@@ -13220,9 +13321,10 @@ function PDVApp() {
       };
       persistE([novoPedido, ...peds]);
       notify("Venda finalizada + Entrega criada! 🚚");
-    } else notify("Venda de " + fmt(cartTotal) + " finalizada! ✓");
+    } else notify("Venda de " + fmt(cartTotalFinal) + " finalizada! ✓");
     setCart([]);
     setSaleCustomer("Avulso");
+    setSaleDesconto(0);
     setCartOpen(false);
   };
   const finalizeSale = () => doFinalizeSale(false);
@@ -13293,11 +13395,12 @@ function PDVApp() {
     const isPrazo = s.payment === "A Prazo";
     const dataStr = s.date || todayStr();
     const larguraMm = 80;
-    const itemRowsTerm = s.items.map(i => "<div class='item'><span>" + i.qty + "x " + i.name + "</span><span>" + fmt(i.price * i.qty) + "</span></div>").join("");
+    const itemRowsTerm = s.items.map(i => "<div class='item'><span>" + i.qty + "x " + i.name + "</span><span>" + fmt(i.price * i.qty) + "</span></div>" + (i.obs ? "<div style='font-size:12px;margin:-1px 0 2px'>\uD83D\uDCDD " + i.obs + "</div>" : "")).join("");
     const endCli = cliente ? [cliente.rua && cliente.rua + (cliente.numero ? ", " + cliente.numero : ""), cliente.bairro, cliente.cidade && cliente.cidade + (cliente.uf ? " - " + cliente.uf : "")].filter(Boolean).join(", ") : "";
     const promissoria = isPrazo ? gerarNotaPromissoriaTermica((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer, (cliente === null || cliente === void 0 ? void 0 : cliente.cpf) || "", endCli, (cliente === null || cliente === void 0 ? void 0 : cliente.phone) || "", s.total, dataStr, s.id.slice(-6).toUpperCase()) : "";
+    const subtotalLinha = s.desconto > 0 ? "<div class='item'><span>Subtotal</span><span>" + fmt(s.total + s.desconto) + "</span></div>" + "<div class='item'><span>Desconto</span><span>-" + fmt(s.desconto) + "</span></div>" : "";
     const css = "@page{size:" + larguraMm + "mm auto;margin:0}" + "*{box-sizing:border-box;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}" + "body{font-family:Arial,Helvetica,sans-serif;width:" + (larguraMm - 4) + "mm;margin:0 auto;padding:2mm;color:#000;font-size:16px;font-weight:700}" + "hr{border:none;border-top:1px dashed #000;margin:6px 0}" + ".center{text-align:center}" + ".b{font-weight:700}" + ".logo{max-width:60%;max-height:16mm;margin:0 auto 4px;display:block}" + ".titulo{font-size:16px;font-weight:700;letter-spacing:1px}" + ".item{display:flex;justify-content:space-between;gap:6px;margin:2px 0;font-size:16px}" + ".total{display:flex;justify-content:space-between;font-size:17px;font-weight:700;margin-top:6px}" + ".box{border:1px solid #000;padding:4px;margin:6px 0;text-align:center;font-weight:700;font-size:16px}" + "@media print{body{width:" + (larguraMm - 4) + "mm}}";
-    return "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Recibo</title><style>" + css + "</style></head><body>" + "<div class='center'>" + "<img class='logo' src='" + logoSrc + "'/>" + "<div class='titulo'>RECIBO DE VENDA</div>" + "<div>" + s.date + " " + s.time + " \xB7 N\xBA " + s.id.slice(-8).toUpperCase() + "</div>" + "</div>" + "<hr>" + "<div><span class='b'>Cliente:</span> " + ((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer) + "</div>" + (cliente !== null && cliente !== void 0 && cliente.cpf ? "<div><span class='b'>CPF/CNPJ:</span> " + cliente.cpf + "</div>" : "") + (cliente !== null && cliente !== void 0 && cliente.phone ? "<div><span class='b'>Tel:</span> " + cliente.phone + "</div>" : "") + (endCli ? "<div><span class='b'>End:</span> " + endCli + "</div>" : "") + "<hr>" + itemRowsTerm + "<hr>" + "<div class='total'><span>TOTAL</span><span>" + fmt(s.total) + "</span></div>" + "<div style='margin-top:4px'><span class='b'>Pagamento:</span> " + s.payment + "</div>" + (isPrazo ? "<div class='box'>\u26A0\uFE0F A PRAZO</div>" : "") + "<hr>" + "<div class='center'>Obrigado pela prefer\xEAncia! \uD83D\uDC3E</div>" + promissoria + "</body></html>";
+    return "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Recibo</title><style>" + css + "</style></head><body>" + "<div class='center'>" + "<img class='logo' src='" + logoSrc + "'/>" + "<div class='titulo'>RECIBO DE VENDA</div>" + "<div>" + s.date + " " + s.time + " \xB7 N\xBA " + s.id.slice(-8).toUpperCase() + "</div>" + "</div>" + "<hr>" + "<div><span class='b'>Cliente:</span> " + ((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer) + "</div>" + (cliente !== null && cliente !== void 0 && cliente.cpf ? "<div><span class='b'>CPF/CNPJ:</span> " + cliente.cpf + "</div>" : "") + (cliente !== null && cliente !== void 0 && cliente.phone ? "<div><span class='b'>Tel:</span> " + cliente.phone + "</div>" : "") + (endCli ? "<div><span class='b'>End:</span> " + endCli + "</div>" : "") + "<hr>" + itemRowsTerm + "<hr>" + subtotalLinha + "<div class='total'><span>TOTAL</span><span>" + fmt(s.total) + "</span></div>" + "<div style='margin-top:4px'><span class='b'>Pagamento:</span> " + s.payment + "</div>" + (isPrazo ? "<div class='box'>\u26A0\uFE0F A PRAZO</div>" : "") + "<hr>" + "<div class='center'>Obrigado pela prefer\xEAncia! \uD83D\uDC3E</div>" + promissoria + "</body></html>";
   };
   const imprimirRecibo = async s => {
     const cliente = customers.find(c => c.name === s.customer);
@@ -13329,10 +13432,11 @@ function PDVApp() {
     const isPrazo = s.payment === "A Prazo";
     const larguraMm = 92;
     const fsTerm = 20;
-    const itemRowsTerm = s.items.map(i => "<div class='item'><span>" + i.qty + "x " + i.name + "</span><span>" + fmt(i.price * i.qty) + "</span></div>").join("");
+    const itemRowsTerm = s.items.map(i => "<div class='item'><span>" + i.qty + "x " + i.name + "</span><span>" + fmt(i.price * i.qty) + "</span></div>" + (i.obs ? "<div class='sub' style='margin:-1px 0 2px'>\uD83D\uDCDD " + i.obs + "</div>" : "")).join("");
     const endCli = cliente ? [cliente.rua && cliente.rua + (cliente.numero ? ", " + cliente.numero : ""), cliente.bairro, cliente.cidade && cliente.cidade + (cliente.uf ? " - " + cliente.uf : "")].filter(Boolean).join(", ") : "";
+    const subtotalLinha = s.desconto > 0 ? "<div class='item'><span>Subtotal</span><span>" + fmt(s.total + s.desconto) + "</span></div>" + "<div class='item'><span>Desconto</span><span>-" + fmt(s.desconto) + "</span></div>" : "";
     const css = "@page{size:" + larguraMm + "mm auto;margin:0}" + "*{box-sizing:border-box}" + "body{font-family:Arial,Helvetica,sans-serif;width:" + (larguraMm - 4) + "mm;margin:0 auto;padding:2mm;color:#000;font-size:" + fsTerm + "px;font-weight:400}" + "hr{border:none;border-top:1px dashed #000;margin:6px 0}" + ".center{text-align:center}" + ".b{font-weight:400}" + ".titulo{font-size:" + fsTerm + "px;font-weight:700;letter-spacing:1px}" + ".sub{font-size:11px}" + ".item{display:flex;justify-content:space-between;gap:6px;margin:2px 0;font-size:" + fsTerm + "px}" + ".total{display:flex;justify-content:space-between;font-size:" + fsTerm + "px;font-weight:400;margin-top:6px}" + ".box{border:1px solid #000;padding:4px;margin:6px 0;text-align:center;font-weight:400;font-size:" + fsTerm + "px}" + "@media print{body{width:" + (larguraMm - 4) + "mm}}";
-    return "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Recibo</title><style>" + css + "</style></head><body>" + "<div class='center'>" + "<div class='titulo'>RECIBO DE VENDA</div>" + "<div class='sub'>" + s.date + " " + s.time + " \xB7 N\xBA " + s.id.slice(-8).toUpperCase() + "</div>" + "</div>" + "<hr>" + "<div><span class='b'>Cliente:</span> " + ((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer) + "</div>" + (cliente !== null && cliente !== void 0 && cliente.cpf ? "<div><span class='b'>CPF/CNPJ:</span> " + cliente.cpf + "</div>" : "") + (cliente !== null && cliente !== void 0 && cliente.phone ? "<div><span class='b'>Tel:</span> " + cliente.phone + "</div>" : "") + (endCli ? "<div><span class='b'>End:</span> " + endCli + "</div>" : "") + "<hr>" + itemRowsTerm + "<hr>" + "<div class='total'><span>TOTAL</span><span>" + fmt(s.total) + "</span></div>" + "<div style='margin-top:4px'><span class='b'>Pagamento:</span> " + s.payment + "</div>" + (isPrazo ? "<div class='box'>A PRAZO</div>" : "") + "<hr>" + "<div class='center'>Obrigado pela prefer\xEAncia!</div>" + "</body></html>";
+    return "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Recibo</title><style>" + css + "</style></head><body>" + "<div class='center'>" + "<div class='titulo'>RECIBO DE VENDA</div>" + "<div class='sub'>" + s.date + " " + s.time + " \xB7 N\xBA " + s.id.slice(-8).toUpperCase() + "</div>" + "</div>" + "<hr>" + "<div><span class='b'>Cliente:</span> " + ((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer) + "</div>" + (cliente !== null && cliente !== void 0 && cliente.cpf ? "<div><span class='b'>CPF/CNPJ:</span> " + cliente.cpf + "</div>" : "") + (cliente !== null && cliente !== void 0 && cliente.phone ? "<div><span class='b'>Tel:</span> " + cliente.phone + "</div>" : "") + (endCli ? "<div><span class='b'>End:</span> " + endCli + "</div>" : "") + "<hr>" + itemRowsTerm + "<hr>" + subtotalLinha + "<div class='total'><span>TOTAL</span><span>" + fmt(s.total) + "</span></div>" + "<div style='margin-top:4px'><span class='b'>Pagamento:</span> " + s.payment + "</div>" + (isPrazo ? "<div class='box'>A PRAZO</div>" : "") + "<hr>" + "<div class='center'>Obrigado pela prefer\xEAncia!</div>" + "</body></html>";
   };
   const imprimirReciboTermica2 = async s => {
     const cliente = customers.find(c => c.name === s.customer);
@@ -13358,9 +13462,10 @@ function PDVApp() {
     const dataStr = s.date || todayStr();
     const endCli = cliente ? [cliente.rua && cliente.rua + (cliente.numero ? ", " + cliente.numero : ""), cliente.bairro, cliente.cidade && cliente.cidade + (cliente.uf ? " - " + cliente.uf : "")].filter(Boolean).join(", ") : "";
     const promissoria = isPrazo ? gerarNotaPromissoria((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer, (cliente === null || cliente === void 0 ? void 0 : cliente.cpf) || "", endCli, (cliente === null || cliente === void 0 ? void 0 : cliente.phone) || "", s.total, dataStr, s.id.slice(-6).toUpperCase()) : "";
-    const itemRows = s.items.map(i => "<tr><td>" + i.name + "</td><td style='text-align:center'>" + i.qty + "x</td><td style='text-align:right;font-weight:600'>" + fmt(i.price * i.qty) + "</td></tr>").join("");
+    const itemRows = s.items.map(i => "<tr><td>" + i.name + (i.obs ? "<div style='font-size:10px;color:#888;margin-top:2px'>\uD83D\uDCDD " + i.obs + "</div>" : "") + "</td><td style='text-align:center'>" + i.qty + "x</td><td style='text-align:right;font-weight:600'>" + fmt(i.price * i.qty) + "</td></tr>").join("");
     const css = "@page{margin:0}*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}body{font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;color:#111;}table{width:100%;border-collapse:collapse;font-size:12px;}th{background:#f3f4f6;padding:6px;text-align:left;font-size:10px;text-transform:uppercase;}td{padding:6px;border-bottom:1px solid #f3f4f6;}.total{font-size:16px;font-weight:800;text-align:right;margin-top:10px;color:#2D3A8C;}@media print{body{max-width:100%;padding:8px}}";
-    return "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Recibo</title><style>" + css + "</style></head><body>" + "<div style='background:#2D3A8C;color:#fff;padding:14px;border-radius:8px;margin-bottom:16px;display:flex;align-items:center;gap:12px'>" + "<img src='" + LOGO_SRC + "' alt='logo' style='height:40px;flex-shrink:0'/>" + "<div style='text-align:left'>" + "<div style='font-size:15px;font-weight:800;letter-spacing:1px'>RECIBO DE VENDA</div>" + "<div style='font-size:11px;margin-top:3px;opacity:.85'>" + s.date + " " + s.time + " \xB7 N\xBA " + s.id.slice(-8).toUpperCase() + "</div>" + "</div>" + "</div>" + "<div style='background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-bottom:12px;font-size:12px'>" + "<b>Cliente:</b> " + ((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer) + (cliente !== null && cliente !== void 0 && cliente.phone ? " \xB7 \uD83D\uDCDE" + cliente.phone : "") + "<br>" + (cliente !== null && cliente !== void 0 && cliente.cpf ? "<b>CPF/CNPJ:</b> " + cliente.cpf + "<br>" : "") + (endCli ? "<b>Endere\xE7o:</b> " + endCli + "<br>" : "") + "</div>" + "<table><thead><tr><th>Produto</th><th style='text-align:center'>Qtd</th><th style='text-align:right'>Valor</th></tr></thead><tbody>" + itemRows + "</tbody></table>" + "<div class='total'>TOTAL: " + fmt(s.total) + "</div>" + "<div style='margin-top:8px;font-size:12px'><b>Pagamento:</b> " + s.payment + "</div>" + (isPrazo ? "<div style='margin-top:10px;padding:10px;border-radius:6px;border:2px solid #f59e0b;font-size:13px;font-weight:800;text-align:center;color:#f59e0b'>\u26A0\uFE0F A PRAZO</div>" : "") + "<div style='border-top:2px solid #2D3A8C;margin-top:20px;padding-top:14px;font-size:11px;color:#888;text-align:center'>Obrigado pela prefer\xEAncia!</div>" + promissoria + "</body></html>";
+    const subtotalLinha = s.desconto > 0 ? "<div style='font-size:12px;text-align:right;color:#666'>Subtotal: " + fmt(s.total + s.desconto) + "</div>" + "<div style='font-size:12px;text-align:right;color:#e74c3c'>Desconto: -" + fmt(s.desconto) + "</div>" : "";
+    return "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Recibo</title><style>" + css + "</style></head><body>" + "<div style='background:#2D3A8C;color:#fff;padding:14px;border-radius:8px;margin-bottom:16px;display:flex;align-items:center;gap:12px'>" + "<img src='" + LOGO_SRC + "' alt='logo' style='height:40px;flex-shrink:0'/>" + "<div style='text-align:left'>" + "<div style='font-size:15px;font-weight:800;letter-spacing:1px'>RECIBO DE VENDA</div>" + "<div style='font-size:11px;margin-top:3px;opacity:.85'>" + s.date + " " + s.time + " \xB7 N\xBA " + s.id.slice(-8).toUpperCase() + "</div>" + "</div>" + "</div>" + "<div style='background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-bottom:12px;font-size:12px'>" + "<b>Cliente:</b> " + ((cliente === null || cliente === void 0 ? void 0 : cliente.name) || s.customer) + (cliente !== null && cliente !== void 0 && cliente.phone ? " \xB7 \uD83D\uDCDE" + cliente.phone : "") + "<br>" + (cliente !== null && cliente !== void 0 && cliente.cpf ? "<b>CPF/CNPJ:</b> " + cliente.cpf + "<br>" : "") + (endCli ? "<b>Endere\xE7o:</b> " + endCli + "<br>" : "") + "</div>" + "<table><thead><tr><th>Produto</th><th style='text-align:center'>Qtd</th><th style='text-align:right'>Valor</th></tr></thead><tbody>" + itemRows + "</tbody></table>" + subtotalLinha + "<div class='total'>TOTAL: " + fmt(s.total) + "</div>" + "<div style='margin-top:8px;font-size:12px'><b>Pagamento:</b> " + s.payment + "</div>" + (isPrazo ? "<div style='margin-top:10px;padding:10px;border-radius:6px;border:2px solid #f59e0b;font-size:13px;font-weight:800;text-align:center;color:#f59e0b'>\u26A0\uFE0F A PRAZO</div>" : "") + "<div style='border-top:2px solid #2D3A8C;margin-top:20px;padding-top:14px;font-size:11px;color:#888;text-align:center'>Obrigado pela prefer\xEAncia!</div>" + promissoria + "</body></html>";
   };
   const imprimirReciboA4 = async s => {
     const cliente = customers.find(c => c.name === s.customer);
@@ -16573,9 +16678,12 @@ function PDVApp() {
     setSaleCustomer: setSaleCustomer,
     salePayment: salePayment,
     setSalePayment: setSalePayment,
+    saleDesconto: saleDesconto,
+    setSaleDesconto: setSaleDesconto,
     chgQty: chgQty,
     rmCart: rmCart,
     cartTotal: cartTotal,
+    cartTotalFinal: cartTotalFinal,
     onFinalize: finalizeSale,
     onFinalizeEntrega: finalizeSaleComEntrega,
     onCadastrarCliente: cadastrarClienteAvulso,
