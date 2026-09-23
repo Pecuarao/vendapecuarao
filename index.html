@@ -6009,6 +6009,7 @@ function CartDrawer(_ref18) {
 
 // ── VENDA ATACADO ─────────────────────────────────────────────────────────────
 function AtacadoPage(_ref19) {
+  const screen = useScreenSize();
   let S = _ref19.S,
     products = _ref19.products,
     customers = _ref19.customers,
@@ -6409,7 +6410,7 @@ function AtacadoPage(_ref19) {
   }, filtered.length, " produto(s) dispon\xEDvel(is)"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "grid",
-      gridTemplateColumns: "repeat(2,1fr)",
+      gridTemplateColumns: screen.desktop ? "repeat(5,1fr)" : screen.tablet ? "repeat(3,1fr)" : "repeat(2,1fr)",
       gap: 10
     }
   }, filtered.map(prod => {
@@ -6433,7 +6434,7 @@ function AtacadoPage(_ref19) {
     }, prod.photo ? /*#__PURE__*/React.createElement("div", {
       style: {
         width: "100%",
-        height: 80,
+        height: 90,
         overflow: "hidden",
         background: "#0a0c14",
         cursor: "zoom-in",
@@ -6462,7 +6463,7 @@ function AtacadoPage(_ref19) {
         fontSize: 10,
         color: "#fff"
       }
-    }, "\uD83D\uDD0D")) : /*#__PURE__*/React.createElement("div", {
+    }, "\uD83D\uDD0D Zoom")) : /*#__PURE__*/React.createElement("div", {
       style: {
         width: "100%",
         height: 6,
@@ -6470,7 +6471,7 @@ function AtacadoPage(_ref19) {
       }
     }), /*#__PURE__*/React.createElement("div", {
       style: {
-        padding: 10
+        padding: 12
       }
     }, inCart && /*#__PURE__*/React.createElement("div", {
       style: {
@@ -6489,25 +6490,25 @@ function AtacadoPage(_ref19) {
       style: {
         fontSize: 10,
         color: "var(--text-secondary)",
-        marginBottom: 2
+        marginBottom: 3
       }
     }, prod.category), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 13,
         fontWeight: 600,
-        marginBottom: 4,
+        marginBottom: 6,
         lineHeight: 1.3
       }
     }, prod.name), /*#__PURE__*/React.createElement("div", {
       style: {
-        fontSize: 15,
+        fontSize: 16,
         fontWeight: 800,
         color: "#f59e0b"
       }
     }, fmt(prod.priceAtacado || prod.price)), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 11,
-        marginTop: 2,
+        marginTop: 3,
         color: prod.stock < 10 ? "#F07030" : "var(--text-secondary)"
       }
     }, prod.stock, " ", prod.unit || "unid")));
