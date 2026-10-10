@@ -9729,6 +9729,7 @@ function AgentePage(props) {
   const [ocupado, setOcupado] = useState(false);
   const [pendentes, setPendentes] = useState(null);
   const [historico, setHistorico] = useState(() => load("pdv_agente_acoes", []));
+  const [anexo, setAnexo] = useState(null);
 
   const addChat = (role, text) => setChat(c => {
     const v = [...c, { role, text, t: Date.now() }].slice(-60);
@@ -9738,11 +9739,16 @@ function AgentePage(props) {
   // Mantém só o final da conversa, começando numa mensagem de texto do usuário
   const aparar = msgs => {
     const v = msgs.slice(-30);
-    const i = v.findIndex(m => m.role === "user" && typeof m.content === "string");
+    const i = v.findIndex(m => m.role === "user" && (typeof m.content === "string" || (Array.isArray(m.content) && m.content.every(b => b.type !== "tool_result"))));
     return i > 0 ? v.slice(i) : (i === 0 ? v : []);
   };
+  // Tira imagens e PDFs do histórico salvo; o arquivo só vale na rodada em que foi enviado
+  const semAnexos = msgs => msgs.map(m => {
+    if (m.role !== "user" || !Array.isArray(m.content)) return m;
+    return { ...m, content: m.content.map(b => (b.type === "image" || b.type === "document") ? { type: "text", text: "[anexo enviado antes]" } : b) };
+  });
   const guardarApi = msgs => {
-    const v = aparar(msgs);
+    const v = aparar(semAnexos(msgs));
     setApi(v);
     save("pdv_agente_api", v);
   };
@@ -9859,12 +9865,37 @@ function AgentePage(props) {
     setOcupado(false);
   };
 
+  const escolherArquivo = e => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!f) return;
+    const ehPdf = f.type === "application/pdf";
+    const ehImagem = ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(f.type);
+    if (!ehPdf && !ehImagem) { notify("Envie uma imagem (JPG, PNG, WEBP ou GIF) ou um PDF", "error"); return; }
+    if (f.size > 4 * 1024 * 1024) { notify("Arquivo muito grande (máximo 4 MB)", "error"); return; }
+    const leitor = new FileReader();
+    leitor.onload = () => {
+      const base64 = String(leitor.result).split(",")[1];
+      setAnexo({ nome: f.name, mime: f.type, tipo: ehPdf ? "pdf" : "imagem", base64: base64 });
+    };
+    leitor.readAsDataURL(f);
+  };
+
   const enviar = () => {
     const t = texto.trim();
-    if (!t || ocupado || pendentes) return;
+    if ((!t && !anexo) || ocupado || pendentes) return;
+    const conteudo = anexo
+      ? [
+          anexo.tipo === "pdf"
+            ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: anexo.base64 } }
+            : { type: "image", source: { type: "base64", media_type: anexo.mime, data: anexo.base64 } },
+          { type: "text", text: t || "Leia este documento e me mostre o que encontrou." }
+        ]
+      : t;
+    addChat("user", (anexo ? "📎 " + anexo.nome + (t ? "\n" : "") : "") + t);
     setTexto("");
-    addChat("user", t);
-    processar([...api, { role: "user", content: t }]);
+    setAnexo(null);
+    processar([...api, { role: "user", content: conteudo }]);
   };
 
   const decidir = aprovar => {
@@ -9921,10 +9952,20 @@ function AgentePage(props) {
       h("div", { style: { display: "flex", gap: 6, marginTop: 8 } },
         h("button", { onClick: () => decidir(false), style: { ...S.btn("ghost"), flex: 1, padding: 8, fontSize: 12 } }, "Cancelar"),
         h("button", { onClick: () => decidir(true), style: { ...S.btn("primary"), flex: 1, padding: 8, fontSize: 12, background: "#22c55e", borderColor: "#22c55e" } }, "✅ Confirmar"))),
+    anexo && h("div", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 12, marginBottom: 6, padding: "6px 10px", background: "var(--bg-elevated)", borderRadius: 8 } },
+      h("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "📎 " + anexo.nome),
+      h("button", { onClick: () => setAnexo(null), style: { ...S.btn("ghost"), padding: "2px 8px", fontSize: 11 } }, "✕")),
+    h("input", { id: "agente-anexo", type: "file", accept: "image/png,image/jpeg,image/webp,image/gif,application/pdf", style: { display: "none" }, onChange: escolherArquivo }),
     h("div", { style: { display: "flex", gap: 6, marginBottom: 6 } },
+      h("button", {
+        onClick: () => document.getElementById("agente-anexo").click(),
+        disabled: bloqueado,
+        title: "Anexar print, foto ou PDF",
+        style: { ...S.btn("ghost"), padding: "8px 12px" }
+      }, "📎"),
       h("input", {
         style: { ...S.input, flex: 1 },
-        placeholder: "Digite o pedido...",
+        placeholder: anexo ? "Instrução para o arquivo (opcional)..." : "Digite o pedido...",
         value: texto,
         disabled: bloqueado,
         onChange: e => setTexto(e.target.value),
