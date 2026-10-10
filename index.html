@@ -953,6 +953,16 @@ const _toRow = {
     obs: f.obs || '',
     created_at: f.createdAt || Date.now()
   }),
+  fiado_pagamentos: p => ({
+    id: p.id,
+    sale_id: p.saleId || '',
+    cliente: p.cliente || '',
+    valor: +(p.valor || 0),
+    data: p.data || '',
+    forma: p.forma || '',
+    obs: p.obs || '',
+    criado_em: p.criadoEm || Date.now()
+  }),
   lista_compras: i => ({
     id: i.id,
     name: i.name || '',
@@ -3738,6 +3748,12 @@ function UsersPage(_ref11) {
     k: "importar",
     l: "Importar NF-e"
   }, {
+    k: "fiado",
+    l: "Fiado"
+  }, {
+    k: "agente",
+    l: "Agente IA"
+  }, {
     k: "entregas",
     l: "Entregas"
   }, {
@@ -6149,8 +6165,9 @@ function AtacadoPage(_ref19) {
   } : i));
   const removeItem = id => setItems(prev => prev.filter(i => i.id !== id));
   const subtotal = items.reduce((s, i) => s + i.precoUnit * (1 - (i.descItem || 0) / 100) * i.qty, 0);
-  const total = subtotal * (1 - desconto / 100);
-  const comissaoValor = items.reduce((s, i) => s + calcComissaoItem(i), 0) * (1 - desconto / 100);
+  const descontoValor = Math.min(Math.max(0, +desconto || 0), subtotal);
+  const total = subtotal - descontoValor;
+  const comissaoValor = subtotal > 0 ? items.reduce((s, i) => s + calcComissaoItem(i), 0) * (total / subtotal) : 0;
   const isAvulso = cliente === "Avulso";
   const cliObj = customers.find(c => c.name === cliente);
   const endCli = cliObj ? [cliObj.rua && cliObj.rua + (cliObj.numero ? ", " + cliObj.numero : ""), cliObj.bairro, cliObj.cidade && cliObj.cidade + (cliObj.uf ? " - " + cliObj.uf : "")].filter(Boolean).join(" · ") : "";
@@ -6183,7 +6200,7 @@ function AtacadoPage(_ref19) {
       time: nowTime(),
       createdAt: Date.now(),
       tipo: "atacado",
-      desconto,
+      desconto: descontoValor,
       comissao,
       comissaoValor,
       vendedor: (currentUser === null || currentUser === void 0 ? void 0 : currentUser.name) || "",
@@ -6735,14 +6752,14 @@ function AtacadoPage(_ref19) {
       ...S.lbl,
       marginBottom: 6
     }
-  }, "Desconto Geral (%)"), /*#__PURE__*/React.createElement("input", {
+  }, "Desconto (R$)"), /*#__PURE__*/React.createElement("input", {
     style: {
       ...S.input,
       marginBottom: 10
     },
     type: "number",
     min: "0",
-    max: "100",
+    step: "0.01",
     value: desconto,
     onChange: e => setDesconto(+e.target.value),
     placeholder: "0"
@@ -6752,7 +6769,7 @@ function AtacadoPage(_ref19) {
       color: "#f59e0b",
       marginBottom: 8
     }
-  }, "Desconto: -", fmt(subtotal * desconto / 100)), /*#__PURE__*/React.createElement("div", {
+  }, "Desconto: -", fmt(descontoValor)), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       justifyContent: "space-between",
@@ -7038,7 +7055,7 @@ function AtacadoPage(_ref19) {
       fontSize: 12,
       color: "#f59e0b"
     }
-  }, /*#__PURE__*/React.createElement("span", null, "Desconto (", desconto, "%)"), /*#__PURE__*/React.createElement("span", null, "-", fmt(subtotal * desconto / 100))), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("span", null, "Desconto"), /*#__PURE__*/React.createElement("span", null, "-", fmt(descontoValor))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       justifyContent: "space-between",
@@ -9397,6 +9414,537 @@ function ImportarPage(_ref21) {
 }
 
 // ── ENTREGAS ────────────────────────────────────────────────────────────────────
+// ── Fiado: gestão das notinhas a prazo por cliente ──
+const FIADO_FORMAS = ["Dinheiro", "Pix", "Cartão Débito", "Cartão Crédito", "Transferência", "Outro"];
+function FiadoPage(props) {
+  const h = React.createElement;
+  const S = props.S,
+    sales = props.sales || [],
+    notify = props.notify;
+  const [pagamentos, setPagamentos] = useState(() => load("pdv_fiado_pagamentos", []));
+  const [clienteSel, setClienteSel] = useState(null);
+  const [busca, setBusca] = useState("");
+  const [filtro, setFiltro] = useState("pendentes");
+  const [selecionadas, setSelecionadas] = useState([]);
+  const [expandidas, setExpandidas] = useState([]);
+  const [formAberto, setFormAberto] = useState(false);
+  const [valorRec, setValorRec] = useState("");
+  const [formaRec, setFormaRec] = useState("Dinheiro");
+  const [dataRec, setDataRec] = useState(todayStr());
+
+  // Tabela própria no Supabase: busca os pagamentos ao abrir a tela
+  useEffect(() => {
+    syncLoadTable("fiado_pagamentos").then(rows => {
+      if (!Array.isArray(rows)) return;
+      const doServidor = rows.map(r => ({
+        id: r.id,
+        saleId: r.sale_id || "",
+        cliente: r.cliente || "",
+        valor: +(r.valor || 0),
+        data: r.data || "",
+        forma: r.forma || "",
+        obs: r.obs || "",
+        criadoEm: r.criado_em || Date.now()
+      }));
+      const tomb = new Set(getTombstones()["fiado_pagamentos"] || []);
+      setPagamentos(prev => {
+        const merged = mergeById(prev, doServidor, tomb, "fiado_pagamentos");
+        save("pdv_fiado_pagamentos", merged);
+        return merged;
+      });
+    });
+  }, []);
+
+  const hoje = todayStr();
+  const pagosPorVenda = {};
+  pagamentos.forEach(p => {
+    pagosPorVenda[p.saleId] = (pagosPorVenda[p.saleId] || 0) + (+p.valor || 0);
+  });
+  const notas = sales.filter(s => s.payment === "A Prazo").map(s => {
+    const total = +s.total || 0;
+    const registrado = pagosPorVenda[s.id] || 0;
+    // Notas marcadas como pagas no sistema antigo (sem registro de pagamento) contam como quitadas
+    const pago = registrado > 0 ? Math.min(total, registrado) : (s.prazoPago === true ? total : 0);
+    const saldo = Math.max(0, +(total - pago).toFixed(2));
+    const vencimento = s.prazoVencimento || addDias(s.date, 30);
+    const quitada = saldo <= 0.009;
+    const atrasada = !quitada && vencimento < hoje;
+    return {
+      ...s,
+      total,
+      pago,
+      saldo,
+      vencimento,
+      quitada,
+      atrasada,
+      diasAtraso: atrasada ? diffDias(hoje, vencimento) : 0
+    };
+  });
+
+  const porCliente = {};
+  notas.forEach(n => {
+    const nome = n.customer || "Avulso";
+    if (!porCliente[nome]) porCliente[nome] = { nome, notas: [], saldo: 0, pendentes: 0, atrasadas: 0 };
+    const c = porCliente[nome];
+    c.notas.push(n);
+    if (!n.quitada) {
+      c.saldo += n.saldo;
+      c.pendentes++;
+      if (n.atrasada) c.atrasadas++;
+    }
+  });
+  const totalReceber = Object.values(porCliente).reduce((s, c) => s + c.saldo, 0);
+  const totalAtrasadas = Object.values(porCliente).reduce((s, c) => s + c.atrasadas, 0);
+  const listaClientes = Object.values(porCliente)
+    .filter(c => c.nome.toLowerCase().includes(busca.trim().toLowerCase()))
+    .sort((a, b) => (b.atrasadas - a.atrasadas) || (b.saldo - a.saldo) || a.nome.localeCompare(b.nome, "pt-BR"));
+
+  const lblStyle = { fontSize: 11, color: "var(--text-secondary)", textTransform: "uppercase" };
+  const vazio = txt => h("div", { style: { textAlign: "center", color: "var(--text-secondary)", padding: 20 } }, txt);
+
+  const adicionarPagamentos = novos => {
+    const v = [...pagamentos, ...novos];
+    setPagamentos(v);
+    save("pdv_fiado_pagamentos", v);
+    novos.forEach(p => syncSaveOne("fiado_pagamentos", p));
+  };
+
+  const removerPagamento = p => {
+    if (!window.confirm("Remover o pagamento de " + fmt(p.valor) + " (" + p.data + ")?")) return;
+    const v = pagamentos.filter(x => x.id !== p.id);
+    setPagamentos(v);
+    save("pdv_fiado_pagamentos", v);
+    addTombstone("fiado_pagamentos", p.id);
+    syncDeleteOne("fiado_pagamentos", p.id).then(ok => {
+      if (ok) clearTombstone("fiado_pagamentos", p.id);
+    });
+    notify("Pagamento removido", "success");
+  };
+
+  const cli = clienteSel ? porCliente[clienteSel] : null;
+
+  if (cli) {
+    const aplicaFiltro = n => filtro === "pendentes" ? !n.quitada : filtro === "atrasadas" ? n.atrasada : filtro === "pagas" ? n.quitada : true;
+    const notasCli = cli.notas.filter(aplicaFiltro).sort((a, b) => a.date < b.date ? 1 : -1);
+    const selecionaveis = cli.notas.filter(n => !n.quitada);
+    const sel = selecionaveis.filter(n => selecionadas.includes(n.id));
+    const saldoSel = sel.reduce((s, n) => s + n.saldo, 0);
+    const todasSel = selecionaveis.length > 0 && selecionaveis.every(n => selecionadas.includes(n.id));
+
+    const toggleSel = id => setSelecionadas(v => v.includes(id) ? v.filter(x => x !== id) : [...v, id]);
+    const toggleTodas = () => setSelecionadas(todasSel ? [] : selecionaveis.map(n => n.id));
+    const toggleExp = id => setExpandidas(v => v.includes(id) ? v.filter(x => x !== id) : [...v, id]);
+    const fecharCliente = () => {
+      setClienteSel(null);
+      setSelecionadas([]);
+      setExpandidas([]);
+      setFormAberto(false);
+    };
+    const abrirRecebimento = () => {
+      setValorRec(saldoSel.toFixed(2));
+      setDataRec(todayStr());
+      setFormaRec("Dinheiro");
+      setFormAberto(true);
+    };
+    const receber = () => {
+      const alvo = parseFloat(String(valorRec).replace(",", ".")) || 0;
+      if (alvo <= 0) {
+        notify("Informe um valor maior que zero", "error");
+        return;
+      }
+      let restante = alvo;
+      const novos = [];
+      sel.slice().sort((a, b) => a.date < b.date ? -1 : 1).forEach(n => {
+        if (restante <= 0.009) return;
+        const valor = Math.min(restante, n.saldo);
+        novos.push({
+          id: uid(),
+          saleId: n.id,
+          cliente: cli.nome,
+          valor: +valor.toFixed(2),
+          data: dataRec,
+          forma: formaRec,
+          obs: "",
+          criadoEm: Date.now()
+        });
+        restante -= valor;
+      });
+      if (novos.length === 0) return;
+      adicionarPagamentos(novos);
+      notify("Recebido " + fmt(alvo - restante) + " ✓", "success");
+      setSelecionadas([]);
+      setFormAberto(false);
+      setValorRec("");
+    };
+
+    // Impressões: usam as notas selecionadas; se nenhuma, o filtro atual
+    const listaImp = sel.length > 0 ? sel : notasCli;
+    const rotulo = sel.length > 0 ? "notas selecionadas" : "filtro: " + filtro;
+    const th = "style='text-align:left;padding:8px;border-bottom:2px solid #333;font-size:12px'";
+    const thR = "style='text-align:right;padding:8px;border-bottom:2px solid #333;font-size:12px'";
+    const td = "style='padding:7px 8px;border-bottom:1px solid #ddd;font-size:12px'";
+    const tdR = "style='padding:7px 8px;border-bottom:1px solid #ddd;font-size:12px;text-align:right'";
+    const abrirImpressao = (titulo, corpo) => {
+      printHTMLDoc("<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + titulo + " - " + cli.nome + "</title></head><body style='font-family:Arial,sans-serif;padding:30px;color:#222'><h2 style='color:#E8682A;margin:0 0 4px'>" + titulo + " — " + cli.nome + "</h2><div style='color:#666;font-size:13px;margin-bottom:18px'>(" + rotulo + ") · " + new Date().toLocaleString("pt-BR") + "</div>" + corpo + "</body></html>", titulo + " - " + cli.nome);
+    };
+    const imprimirPedidos = () => {
+      const lista = listaImp.slice().sort((a, b) => a.date < b.date ? -1 : 1);
+      const linhas = lista.map(n => "<tr><td " + td + ">" + n.date + "</td><td " + td + ">Nº " + n.id.slice(-6).toUpperCase() + "</td><td " + td + ">" + n.vencimento + "</td><td " + tdR + ">" + fmt(n.total) + "</td><td " + tdR + ">" + fmt(n.pago) + "</td><td " + tdR + "><b>" + fmt(n.saldo) + "</b></td><td " + td + ">" + (n.quitada ? "Paga" : n.atrasada ? "Atrasada (" + n.diasAtraso + "d)" : "No prazo") + "</td></tr>").join("");
+      const tTotal = lista.reduce((s, n) => s + n.total, 0);
+      const tPago = lista.reduce((s, n) => s + n.pago, 0);
+      const tSaldo = lista.reduce((s, n) => s + n.saldo, 0);
+      abrirImpressao("Pedidos do Fiado", "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Data</th><th " + th + ">Nº</th><th " + th + ">Venc.</th><th " + thR + ">Valor</th><th " + thR + ">Pago</th><th " + thR + ">Saldo</th><th " + th + ">Situação</th></tr>" + linhas + "</table><p style='margin-top:16px;font-size:14px'><b>Total: " + fmt(tTotal) + " · Pago: " + fmt(tPago) + " · Saldo: " + fmt(tSaldo) + "</b></p>");
+    };
+    const imprimirProdutos = () => {
+      const mapa = {};
+      listaImp.forEach(n => {
+        const itens = n.items || [];
+        const subNota = itens.reduce((s, i) => s + (+i.price || 0) * (+i.qty || 0), 0);
+        // Rateia o desconto geral da nota para o total bater com a nota
+        const fator = subNota > 0 ? n.total / subNota : 1;
+        itens.forEach(i => {
+          const chave = i.name || "Item";
+          if (!mapa[chave]) mapa[chave] = { nome: chave, qtd: 0, total: 0 };
+          mapa[chave].qtd += +i.qty || 0;
+          mapa[chave].total += (+i.price || 0) * (+i.qty || 0) * fator;
+        });
+      });
+      const produtos = Object.values(mapa).sort((a, b) => b.total - a.total);
+      const total = produtos.reduce((s, p) => s + p.total, 0);
+      const linhas = produtos.map(p => "<tr><td " + td + ">" + p.nome + "</td><td " + tdR + ">" + p.qtd + "</td><td " + tdR + ">" + fmt(p.total) + "</td></tr>").join("");
+      abrirImpressao("Produtos do Fiado", "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Produto</th><th " + thR + ">Qtd</th><th " + thR + ">Valor</th></tr>" + linhas + "</table><p style='margin-top:16px;font-size:15px'><b>TOTAL: " + fmt(total) + "</b></p>");
+    };
+
+    const chip = par => h("button", {
+      key: par[0],
+      onClick: () => setFiltro(par[0]),
+      style: { ...S.btn(filtro === par[0] ? "primary" : "ghost"), padding: "6px 12px", fontSize: 12 }
+    }, par[1]);
+    const btnG = (label, onClick) => h("button", {
+      onClick: onClick,
+      style: { ...S.btn("ghost"), flex: 1, padding: "8px", fontSize: 12 }
+    }, label);
+
+    const renderNota = n => {
+      const pagsNota = pagamentos.filter(p => p.saleId === n.id).sort((a, b) => a.data < b.data ? -1 : 1);
+      const cor = n.quitada ? "#4ade80" : n.atrasada ? "#c0392b" : "#f59e0b";
+      const rotuloSit = n.quitada ? "✅ Paga" : n.atrasada ? "🔴 Atrasada " + n.diasAtraso + "d" : "🟡 No prazo";
+      return h("div", { key: n.id, style: { ...S.card, padding: "10px 12px", marginBottom: 6 } },
+        h("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
+          !n.quitada && h("input", {
+            type: "checkbox",
+            checked: selecionadas.includes(n.id),
+            onChange: () => toggleSel(n.id),
+            style: { width: 18, height: 18, flexShrink: 0, accentColor: "#E8682A", cursor: "pointer" }
+          }),
+          h("div", { style: { flex: 1 } },
+            h("div", { style: { fontSize: 13, fontWeight: 600 } }, "Nº " + n.id.slice(-6).toUpperCase() + " · " + fmt(n.total)),
+            h("div", { style: { fontSize: 11, color: "var(--text-secondary)" } }, "Venda: " + n.date + " · Vence: " + n.vencimento + " · Pago: " + fmt(n.pago))),
+          h("div", { style: { textAlign: "right" } },
+            h("div", { style: { fontSize: 14, fontWeight: 800, color: cor } }, n.quitada ? "Quitada" : fmt(n.saldo)),
+            h("div", { style: { fontSize: 11, fontWeight: 700, color: cor, whiteSpace: "nowrap" } }, rotuloSit))),
+        pagsNota.length > 0 && h("button", {
+          onClick: () => toggleExp(n.id),
+          style: { ...S.btn("ghost"), marginTop: 8, padding: "4px 10px", fontSize: 11 }
+        }, "🧾 Pagamentos (" + pagsNota.length + ")"),
+        expandidas.includes(n.id) && pagsNota.map(p => h("div", { key: p.id, style: { display: "flex", alignItems: "center", gap: 8, fontSize: 12, padding: "6px 0", borderTop: "1px solid var(--bg-elevated)", marginTop: 6 } },
+          h("span", { style: { flex: 1 } }, p.data + " · " + p.forma),
+          h("span", { style: { fontWeight: 700, color: "#4ade80" } }, fmt(p.valor)),
+          h("button", { onClick: () => removerPagamento(p), style: { ...S.btn("ghost"), padding: "2px 8px", fontSize: 11, color: "#ef4444" } }, "🗑️"))));
+    };
+
+    return h("div", null,
+      h("button", { onClick: fecharCliente, style: { ...S.btn("ghost"), marginBottom: 12, fontSize: 12, padding: "6px 12px" } }, "← Voltar"),
+      h("div", { style: { ...S.card, padding: 14, marginBottom: 12 } },
+        h("div", { style: { fontWeight: 800, fontSize: 16 } }, cli.nome),
+        h("div", { style: { fontSize: 12, color: "var(--text-secondary)", marginTop: 2 } }, cli.pendentes + " pendente(s)" + (cli.atrasadas > 0 ? " · " + cli.atrasadas + " atrasada(s)" : "")),
+        h("div", { style: { fontSize: 20, fontWeight: 800, color: cli.saldo > 0 ? "#c0392b" : "#4ade80", marginTop: 6 } }, "Saldo: " + fmt(cli.saldo))),
+      h("div", { style: { display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" } },
+        [["pendentes", "Pendentes"], ["atrasadas", "Atrasadas"], ["pagas", "Pagas"], ["todas", "Todas"]].map(chip)),
+      h("div", { style: { display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" } },
+        btnG(todasSel ? "☐ Desmarcar todas" : "☑ Selecionar todas", toggleTodas),
+        btnG("🖨️ Imprimir pedidos", imprimirPedidos),
+        btnG("🖨️ Imprimir produtos", imprimirProdutos)),
+      sel.length > 0 && h("div", { style: { ...S.card, padding: "10px 12px", marginBottom: 10 } },
+        h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 } },
+          h("span", { style: { fontSize: 12, color: "var(--text-secondary)" } }, sel.length + " nota(s) · saldo"),
+          h("span", { style: { fontSize: 16, fontWeight: 800, color: "#f59e0b" } }, fmt(saldoSel))),
+        !formAberto && h("button", {
+          onClick: abrirRecebimento,
+          style: { ...S.btn("primary"), width: "100%", justifyContent: "center", padding: 10, marginTop: 10, fontSize: 13, background: "#22c55e", borderColor: "#22c55e" }
+        }, "💰 Receber selecionadas")),
+      formAberto && sel.length > 0 && h("div", { style: { ...S.card, padding: 14, marginBottom: 12, border: "1px solid #22c55e" } },
+        h("div", { style: { ...lblStyle, marginBottom: 6 } }, "Valor recebido (R$)"),
+        h("input", { style: { ...S.input, marginBottom: 8 }, type: "number", step: "0.01", min: "0", value: valorRec, onChange: e => setValorRec(e.target.value) }),
+        h("div", { style: { ...lblStyle, marginBottom: 6 } }, "Forma de pagamento"),
+        h("select", { style: { ...S.input, marginBottom: 8 }, value: formaRec, onChange: e => setFormaRec(e.target.value) },
+          FIADO_FORMAS.map(f => h("option", { key: f, value: f }, f))),
+        h("div", { style: { ...lblStyle, marginBottom: 6 } }, "Data"),
+        h("input", { style: { ...S.input, marginBottom: 8 }, type: "date", value: dataRec, onChange: e => setDataRec(e.target.value) }),
+        h("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 8 } }, "O valor é aplicado nas notas selecionadas, da mais antiga para a mais nova."),
+        h("div", { style: { display: "flex", gap: 6 } },
+          h("button", { onClick: () => setFormAberto(false), style: { ...S.btn("ghost"), flex: 1, padding: 10, fontSize: 13 } }, "Cancelar"),
+          h("button", { onClick: receber, style: { ...S.btn("primary"), flex: 1, padding: 10, fontSize: 13, background: "#22c55e", borderColor: "#22c55e" } }, "✅ Confirmar"))),
+      notasCli.length === 0 ? vazio("Nenhuma nota nessa situação.") : notasCli.map(renderNota));
+  }
+
+  return h("div", null,
+    h("div", { style: { ...S.card, padding: 14, marginBottom: 12, display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 10 } },
+      h("div", null,
+        h("div", { style: lblStyle }, "Total a receber"),
+        h("div", { style: { fontSize: 20, fontWeight: 800, color: "#c0392b" } }, fmt(totalReceber))),
+      h("div", null,
+        h("div", { style: lblStyle }, "Notas atrasadas"),
+        h("div", { style: { fontSize: 20, fontWeight: 800, color: totalAtrasadas > 0 ? "#c0392b" : "#4ade80" } }, totalAtrasadas))),
+    h("input", { style: { ...S.input, marginBottom: 10 }, placeholder: "Buscar cliente...", value: busca, onChange: e => setBusca(e.target.value) }),
+    listaClientes.length === 0 ? vazio("Nenhuma venda a prazo registrada.") : listaClientes.map(c => h("div", {
+      key: c.nome,
+      onClick: () => {
+        setClienteSel(c.nome);
+        setSelecionadas([]);
+        setExpandidas([]);
+        setFormAberto(false);
+        setFiltro("pendentes");
+      },
+      style: { ...S.card, padding: "12px 14px", marginBottom: 8, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }
+    },
+      h("div", null,
+        h("div", { style: { fontWeight: 700, fontSize: 14 } }, c.nome),
+        h("div", { style: { fontSize: 12, color: "var(--text-secondary)", marginTop: 2 } }, c.pendentes > 0 ? c.pendentes + " pendente(s)" + (c.atrasadas > 0 ? " · " + c.atrasadas + " atrasada(s)" : "") : "Tudo quitado")),
+      h("div", { style: { textAlign: "right", fontWeight: 800, fontSize: 14, color: c.atrasadas > 0 ? "#c0392b" : "var(--text-primary)" } },
+        fmt(c.saldo), " ", h("span", { style: { color: "var(--text-secondary)", fontWeight: 400 } }, "›")))));
+}
+
+// ── Agente de IA: conversa, ações com confirmação e histórico para desfazer ──
+const AGENTE_ESCRITAS = ["cadastrar_produto", "alterar_preco", "alterar_estoque"];
+function AgentePage(props) {
+  const h = React.createElement;
+  const S = props.S,
+    products = props.products || [],
+    persistP = props.persistP,
+    notify = props.notify;
+  const [chat, setChat] = useState(() => load("pdv_agente_chat", []));
+  const [api, setApi] = useState(() => load("pdv_agente_api", []));
+  const [texto, setTexto] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+  const [pendentes, setPendentes] = useState(null);
+  const [historico, setHistorico] = useState(() => load("pdv_agente_acoes", []));
+
+  const addChat = (role, text) => setChat(c => {
+    const v = [...c, { role, text, t: Date.now() }].slice(-60);
+    save("pdv_agente_chat", v);
+    return v;
+  });
+  // Mantém só o final da conversa, começando numa mensagem de texto do usuário
+  const aparar = msgs => {
+    const v = msgs.slice(-30);
+    const i = v.findIndex(m => m.role === "user" && typeof m.content === "string");
+    return i > 0 ? v.slice(i) : (i === 0 ? v : []);
+  };
+  const guardarApi = msgs => {
+    const v = aparar(msgs);
+    setApi(v);
+    save("pdv_agente_api", v);
+  };
+
+  const executarLeitura = (name, input) => {
+    if (name === "buscar_produtos") {
+      const t = String(input.termo || "").toLowerCase().trim();
+      const achados = products.filter(p => (p.name || "").toLowerCase().includes(t) || String(p.barcode || "").includes(t)).slice(0, 15);
+      return JSON.stringify(achados.map(p => ({ id: p.id, nome: p.name, codigo_barras: p.barcode || "", preco: p.price, estoque: p.stock, categoria: p.category || "" })));
+    }
+    return JSON.stringify({ erro: "ferramenta desconhecida" });
+  };
+
+  const resumoEscrita = (name, input) => {
+    if (name === "cadastrar_produto") return "Cadastrar \"" + input.nome + "\" (cód. " + (input.codigo_barras || "—") + ") · " + fmt(+input.preco || 0) + " · estoque " + (+input.estoque || 0);
+    const p = products.find(x => x.id === input.produto_id);
+    const nome = p ? p.name : "(produto não encontrado)";
+    if (name === "alterar_preco") return "Preço de \"" + nome + "\": " + fmt(p ? p.price : 0) + " → " + fmt(+input.preco || 0);
+    return "Estoque de \"" + nome + "\": " + (p ? p.stock : 0) + " → " + (+input.quantidade || 0) + (input.motivo ? " (" + input.motivo + ")" : "");
+  };
+
+  // Aplica uma escrita sobre a lista de trabalho (lista) e devolve o resultado
+  const aplicarEscrita = (lista, name, input) => {
+    if (name === "cadastrar_produto") {
+      const nome = String(input.nome || "").trim();
+      const barcode = String(input.codigo_barras || "").trim();
+      if (!nome) return { ok: false, msg: "Nome vazio", lista };
+      if (barcode && lista.some(p => String(p.barcode || "") === barcode)) return { ok: false, msg: "Código de barras já cadastrado", lista };
+      const novo = { id: uid(), name: nome, barcode, price: +input.preco || 0, stock: +input.estoque || 0, category: input.categoria || "Outros", minStock: 5 };
+      return { ok: true, msg: "Cadastrado", lista: [novo, ...lista], antes: null, depois: novo, descricao: "Cadastrou " + nome };
+    }
+    const p = lista.find(x => x.id === input.produto_id);
+    if (!p) return { ok: false, msg: "Produto não encontrado", lista };
+    const alterado = name === "alterar_preco" ? { ...p, price: +input.preco || 0 } : { ...p, stock: +input.quantidade || 0 };
+    return { ok: true, msg: "Atualizado", lista: lista.map(x => x.id === p.id ? alterado : x), antes: p, depois: alterado, descricao: (name === "alterar_preco" ? "Preço" : "Estoque") + " de " + p.name };
+  };
+
+  const aplicarLote = escritas => {
+    let lista = [...products];
+    const out = {};
+    const novasAcoes = [];
+    escritas.forEach(e => {
+      const r = aplicarEscrita(lista, e.name, e.input);
+      lista = r.lista;
+      out[e.id] = JSON.stringify(r.ok ? { ok: true, mensagem: r.msg } : { ok: false, erro: r.msg });
+      if (r.ok) novasAcoes.push({ id: uid(), quando: Date.now(), descricao: r.descricao, antes: r.antes, depois: r.depois, desfeita: false });
+    });
+    if (novasAcoes.length) {
+      persistP(lista);
+      const h2 = [...novasAcoes.reverse(), ...historico].slice(0, 200);
+      setHistorico(h2);
+      save("pdv_agente_acoes", h2);
+    }
+    return out;
+  };
+
+  const desfazer = acao => {
+    const lista = acao.antes === null
+      ? products.filter(p => p.id !== acao.depois.id)
+      : products.map(p => p.id === acao.antes.id ? acao.antes : p);
+    persistP(lista);
+    const h2 = historico.map(x => x.id === acao.id ? { ...x, desfeita: true } : x);
+    setHistorico(h2);
+    save("pdv_agente_acoes", h2);
+    notify("Ação desfeita", "success");
+  };
+
+  const chamarAgente = async msgs => {
+    const key = _SB_KEY();
+    const r = await fetch(SUPABASE_URL + "/functions/v1/agente", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: key, Authorization: "Bearer " + key },
+      body: JSON.stringify({ messages: msgs })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || data.error) throw new Error(typeof data.error === "string" ? data.error : (data.error && data.error.message) || ("HTTP " + r.status));
+    return data;
+  };
+
+  // Laço: envia, executa leituras, pede confirmação para escritas
+  const processar = async msgsIniciais => {
+    setOcupado(true);
+    let atual = msgsIniciais;
+    try {
+      for (let passo = 0; passo < 8; passo++) {
+        const data = await chamarAgente(atual);
+        const blocos = data.content || [];
+        atual = [...atual, { role: "assistant", content: blocos }];
+        const textos = blocos.filter(b => b.type === "text").map(b => b.text).join("\n").trim();
+        if (textos) addChat("assistant", textos);
+        const usos = blocos.filter(b => b.type === "tool_use");
+        if (data.stop_reason !== "tool_use" || usos.length === 0) {
+          guardarApi(atual);
+          break;
+        }
+        const resultados = {};
+        usos.filter(u => !AGENTE_ESCRITAS.includes(u.name)).forEach(u => { resultados[u.id] = executarLeitura(u.name, u.input); });
+        const escritas = usos.filter(u => AGENTE_ESCRITAS.includes(u.name));
+        if (escritas.length > 0) {
+          guardarApi(atual);
+          setPendentes({
+            msgs: atual,
+            usos: usos,
+            resultados: resultados,
+            escritas: escritas.map(u => ({ id: u.id, name: u.name, input: u.input, resumo: resumoEscrita(u.name, u.input) }))
+          });
+          break;
+        }
+        atual = [...atual, { role: "user", content: usos.map(u => ({ type: "tool_result", tool_use_id: u.id, content: resultados[u.id] })) }];
+      }
+    } catch (e) {
+      addChat("assistant", "⚠️ Não consegui falar com o agente: " + e.message);
+    }
+    setOcupado(false);
+  };
+
+  const enviar = () => {
+    const t = texto.trim();
+    if (!t || ocupado || pendentes) return;
+    setTexto("");
+    addChat("user", t);
+    processar([...api, { role: "user", content: t }]);
+  };
+
+  const decidir = aprovar => {
+    const pd = pendentes;
+    setPendentes(null);
+    let resEscritas = {};
+    if (aprovar) {
+      resEscritas = aplicarLote(pd.escritas.map(e => ({ id: e.id, name: e.name, input: e.input })));
+      addChat("assistant", "✅ " + pd.escritas.length + " alteração(ões) aplicada(s). Você pode desfazer no histórico abaixo.");
+    } else {
+      pd.escritas.forEach(e => { resEscritas[e.id] = JSON.stringify({ cancelado: true, motivo: "usuário não aprovou" }); });
+      addChat("assistant", "Alterações canceladas.");
+    }
+    const toolResults = pd.usos.map(u => ({
+      type: "tool_result",
+      tool_use_id: u.id,
+      content: pd.resultados[u.id] !== undefined ? pd.resultados[u.id] : resEscritas[u.id]
+    }));
+    processar([...pd.msgs, { role: "user", content: toolResults }]);
+  };
+
+  const limpar = () => {
+    setChat([]);
+    setApi([]);
+    setPendentes(null);
+    save("pdv_agente_chat", []);
+    save("pdv_agente_api", []);
+  };
+
+  const bloqueado = ocupado || !!pendentes;
+  const vazio = txt => h("div", { style: { textAlign: "center", color: "var(--text-secondary)", padding: 16, fontSize: 13 } }, txt);
+
+  return h("div", null,
+    h("div", { style: { ...S.card, padding: 12, marginBottom: 10, fontSize: 12, color: "var(--text-secondary)" } },
+      "Agente do Estoque. Ele consulta e propõe alterações; nada é gravado sem a sua confirmação. Todas as ações ficam no histórico, onde dá para desfazer."),
+    h("div", { style: { maxHeight: "50vh", overflowY: "auto", marginBottom: 10, display: "flex", flexDirection: "column" } },
+      chat.length === 0 ? vazio("Ex.: \"cadastrar produto ração X, código 789..., preço 25,90\"") : chat.map((m, i) => h("div", {
+        key: i,
+        style: { display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start", marginBottom: 6 }
+      }, h("div", {
+        style: {
+          maxWidth: "85%",
+          padding: "8px 12px",
+          borderRadius: 10,
+          fontSize: 13,
+          whiteSpace: "pre-wrap",
+          background: m.role === "user" ? "#E8682A" : "var(--bg-elevated)",
+          color: m.role === "user" ? "#fff" : "var(--text-primary)"
+        }
+      }, m.text)))),
+    pendentes && h("div", { style: { ...S.card, padding: 12, marginBottom: 10, border: "1px solid #f59e0b" } },
+      h("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 6 } }, "Confirmar alterações?"),
+      pendentes.escritas.map(e => h("div", { key: e.id, style: { fontSize: 12, padding: "3px 0" } }, "• " + e.resumo)),
+      h("div", { style: { display: "flex", gap: 6, marginTop: 8 } },
+        h("button", { onClick: () => decidir(false), style: { ...S.btn("ghost"), flex: 1, padding: 8, fontSize: 12 } }, "Cancelar"),
+        h("button", { onClick: () => decidir(true), style: { ...S.btn("primary"), flex: 1, padding: 8, fontSize: 12, background: "#22c55e", borderColor: "#22c55e" } }, "✅ Confirmar"))),
+    h("div", { style: { display: "flex", gap: 6, marginBottom: 6 } },
+      h("input", {
+        style: { ...S.input, flex: 1 },
+        placeholder: "Digite o pedido...",
+        value: texto,
+        disabled: bloqueado,
+        onChange: e => setTexto(e.target.value),
+        onKeyDown: e => { if (e.key === "Enter") enviar(); }
+      }),
+      h("button", { onClick: enviar, disabled: bloqueado, style: { ...S.btn("primary"), padding: "8px 14px" } }, ocupado ? "..." : "Enviar")),
+    chat.length > 0 && h("button", { onClick: limpar, style: { ...S.btn("ghost"), fontSize: 11, padding: "4px 10px", marginBottom: 14 } }, "Limpar conversa"),
+    h("div", { style: { ...S.card, padding: 12 } },
+      h("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 6 } }, "🗂️ Histórico de ações"),
+      historico.length === 0 ? vazio("Nenhuma ação ainda.") : historico.slice(0, 30).map(a => h("div", {
+        key: a.id,
+        style: { display: "flex", alignItems: "center", gap: 8, fontSize: 12, padding: "6px 0", borderTop: "1px solid var(--bg-elevated)" }
+      },
+        h("span", { style: { flex: 1, textDecoration: a.desfeita ? "line-through" : "none", opacity: a.desfeita ? 0.6 : 1 } },
+          new Date(a.quando).toLocaleString("pt-BR") + " · " + a.descricao),
+        a.desfeita
+          ? h("span", { style: { color: "#4ade80" } }, "desfeita")
+          : h("button", { onClick: () => desfazer(a), style: { ...S.btn("ghost"), padding: "2px 8px", fontSize: 11 } }, "↩️ Desfazer")))));
+}
+
 function EntregasPage(_ref24) {
   let S = _ref24.S,
     sales = _ref24.sales,
@@ -9466,6 +10014,7 @@ function EntregasPage(_ref24) {
       cliente: "",
       telefone: "",
       endereco: "",
+      desconto: 0,
       items: []
     }),
     _useStateEditPedFormB = _slicedToArray(_useStateEditPedForm, 2),
@@ -9481,6 +10030,7 @@ function EntregasPage(_ref24) {
       cliente: ped.cliente || "",
       telefone: ped.telefone || "",
       endereco: ped.endereco || "",
+      desconto: ped.desconto || 0,
       items: ped.itens || []
     });
     setEditPedAddBusca("");
@@ -9490,13 +10040,16 @@ function EntregasPage(_ref24) {
       notify("Informe o cliente!", "error");
       return;
     }
-    const newTotal = editPedForm.items.reduce((s, i) => s + i.qty * i.price, 0);
+    const editSubtotal = editPedForm.items.reduce((s, i) => s + i.qty * i.price, 0);
+    const editDesconto = Math.min(Math.max(0, +editPedForm.desconto || 0), editSubtotal);
+    const newTotal = editSubtotal - editDesconto;
     persistE(pedidos.map(p => p.id === editPed.id ? {
       ...p,
       cliente: editPedForm.cliente,
       telefone: editPedForm.telefone,
       endereco: editPedForm.endereco,
       itens: editPedForm.items,
+      desconto: editDesconto,
       total: newTotal
     } : p));
     // Se a entrega estiver vinculada a uma venda, atualiza também o Histórico.
@@ -9505,6 +10058,7 @@ function EntregasPage(_ref24) {
         ...x,
         customer: editPedForm.cliente,
         items: editPedForm.items,
+        desconto: editDesconto,
         total: newTotal
       } : x));
     }
@@ -10638,7 +11192,44 @@ function EntregasPage(_ref24) {
       textAlign: "right",
       marginBottom: 16
     }
-  }, "Total: ", fmt(editPedForm.items.reduce((s, i) => s + i.qty * i.price, 0))), /*#__PURE__*/React.createElement("div", {
+  }, "Subtotal: ", fmt(editPedForm.items.reduce((s, i) => s + i.qty * i.price, 0))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.lbl,
+      flex: 1,
+      fontSize: 10
+    }
+  }, "Desconto (R$)"), /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...S.input,
+      width: 130,
+      padding: "7px 10px",
+      fontSize: 13
+    },
+    type: "number",
+    step: "0.01",
+    min: "0",
+    placeholder: "0",
+    value: editPedForm.desconto || "",
+    onChange: e => setEditPedForm(f => ({
+      ...f,
+      desconto: +e.target.value
+    }))
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 800,
+      color: "#4ade80",
+      textAlign: "right",
+      marginBottom: 16
+    }
+  }, "Total: ", fmt(Math.max(0, (editPedForm.items.reduce((s, i) => s + i.qty * i.price, 0)) - Math.min(Math.max(0, +editPedForm.desconto || 0), editPedForm.items.reduce((s, i) => s + i.qty * i.price, 0))))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 10
@@ -11962,7 +12553,7 @@ function RelatoriosPage(_refRel) {
     printHTMLDoc(htmlRel);
   };
 
-  const abas = [["vendas", "💰 Vendas"], ["atacado", "📦 Atacado"], ["prazo", "🗓️ Venda a Prazo"], ["lucro", "📈 Lucro"], ["comissao", "🤝 Comissão"], ["produtos", "🏆 Produtos"], ["estoque", "📦 Estoque"], ["clientes", "👥 Clientes"], ["entregas", "🚚 Entregas"], ["fornecedores", "🏭 Fornecedores"], ["pagamento", "💳 Pagamentos"], ["atacadoMais", "💵 A Mais (Atacado)"]];
+  const abas = [["vendas", "💰 Vendas"], ["atacado", "📦 Atacado"], ["lucro", "📈 Lucro"], ["comissao", "🤝 Comissão"], ["produtos", "🏆 Produtos"], ["estoque", "📦 Estoque"], ["clientes", "👥 Clientes"], ["entregas", "🚚 Entregas"], ["fornecedores", "🏭 Fornecedores"], ["pagamento", "💳 Pagamentos"], ["atacadoMais", "💵 A Mais (Atacado)"]];
 
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -12270,6 +12861,59 @@ function PrazoReportView(props) {
     printHTMLDoc(html, "Venda a Prazo - " + cliente.nome);
   };
 
+  // ── Fiado: seleção, somatório e impressões ──
+  const pendentesCliente = cliente.notas.filter(n => !n.pago);
+  const selecionadasCliente = pendentesCliente.filter(n => selecionadas.includes(n.id));
+  const somaSelecionadas = selecionadasCliente.reduce((s, n) => s + (n.total || 0), 0);
+  const todasSelecionadas = pendentesCliente.length > 0 && pendentesCliente.every(n => selecionadas.includes(n.id));
+  const alternarTodas = () => setSelecionadas(todasSelecionadas ? [] : pendentesCliente.map(n => n.id));
+  const listaImpressao = selecionadasCliente.length > 0 ? selecionadasCliente : notasFiltradas;
+  const rotuloImpressao = selecionadasCliente.length > 0 ? "notas selecionadas" : "filtro: " + filtro;
+
+  const imprimirPedidosFiado = () => {
+    const th = "style='text-align:left;padding:8px;border-bottom:2px solid #333;font-size:12px'";
+    const td = "style='padding:7px 8px;border-bottom:1px solid #ddd;font-size:12px'";
+    const linhas = listaImpressao.slice().sort((a, b) => a.date < b.date ? -1 : 1).map(n =>
+      "<tr><td " + td + ">" + n.date + "</td><td " + td + ">Nº " + n.id.slice(-6).toUpperCase() + "</td><td " + td + ">" + n.vencimento + "</td><td " + td + ">" + (n.pago ? "Paga" : n.atrasada ? "Atrasada (" + n.diasAtraso + "d)" : "No prazo") + "</td><td " + td + " align='right'>" + fmt(n.total) + "</td></tr>"
+    ).join("");
+    const total = listaImpressao.reduce((s, n) => s + (n.total || 0), 0);
+    const html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Fiado - " + cliente.nome + "</title></head>" +
+      "<body style='font-family:Arial,sans-serif;padding:30px;color:#222'>" +
+      "<h2 style='color:#E8682A;margin:0 0 4px'>Fiado — " + cliente.nome + "</h2>" +
+      "<div style='color:#666;font-size:13px;margin-bottom:18px'>Lista de pedidos (" + rotuloImpressao + ") · " + new Date().toLocaleString("pt-BR") + "</div>" +
+      "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Data</th><th " + th + ">Nº</th><th " + th + ">Vencimento</th><th " + th + ">Situação</th><th " + th + " align='right'>Valor</th></tr>" + linhas + "</table>" +
+      "<p style='margin-top:16px;font-size:15px'><b>TOTAL: " + fmt(total) + "</b></p></body></html>";
+    printHTMLDoc(html, "Fiado - " + cliente.nome);
+  };
+
+  const imprimirProdutosFiado = () => {
+    const mapa = {};
+    listaImpressao.forEach(n => {
+      const itens = n.items || [];
+      const subNota = itens.reduce((s, i) => s + (+i.price || 0) * (+i.qty || 0), 0);
+      // Rateia o desconto geral da nota proporcionalmente, para o total bater com as notinhas
+      const fator = subNota > 0 ? (n.total || 0) / subNota : 1;
+      itens.forEach(i => {
+        const chave = i.name || "Item";
+        if (!mapa[chave]) mapa[chave] = { nome: chave, qtd: 0, total: 0 };
+        mapa[chave].qtd += +i.qty || 0;
+        mapa[chave].total += (+i.price || 0) * (+i.qty || 0) * fator;
+      });
+    });
+    const produtos = Object.values(mapa).sort((a, b) => b.total - a.total);
+    const total = produtos.reduce((s, p) => s + p.total, 0);
+    const th = "style='text-align:left;padding:8px;border-bottom:2px solid #333;font-size:12px'";
+    const td = "style='padding:7px 8px;border-bottom:1px solid #ddd;font-size:12px'";
+    const linhas = produtos.map(p => "<tr><td " + td + ">" + p.nome + "</td><td " + td + " align='center'>" + p.qtd + "</td><td " + td + " align='right'>" + fmt(p.total) + "</td></tr>").join("");
+    const html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Produtos - " + cliente.nome + "</title></head>" +
+      "<body style='font-family:Arial,sans-serif;padding:30px;color:#222'>" +
+      "<h2 style='color:#E8682A;margin:0 0 4px'>Produtos comprados — " + cliente.nome + "</h2>" +
+      "<div style='color:#666;font-size:13px;margin-bottom:18px'>(" + rotuloImpressao + ") · " + new Date().toLocaleString("pt-BR") + "</div>" +
+      "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Produto</th><th " + th + " align='center'>Qtd</th><th " + th + " align='right'>Valor</th></tr>" + linhas + "</table>" +
+      "<p style='margin-top:16px;font-size:15px'><b>TOTAL: " + fmt(total) + "</b></p></body></html>";
+    printHTMLDoc(html, "Produtos - " + cliente.nome);
+  };
+
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("button", {
     onClick: () => {
       setClienteSel(null);
@@ -12323,7 +12967,58 @@ function PrazoReportView(props) {
       marginBottom: 10,
       fontSize: 13
     }
-  }, "🖨️ Exportar PDF"), selecionadas.length > 0 && /*#__PURE__*/React.createElement("button", {
+  }, "🖨️ Exportar PDF"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      marginBottom: 10,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: alternarTodas,
+    style: {
+      ...S.btn("ghost"),
+      flex: 1,
+      padding: "8px",
+      fontSize: 12
+    }
+  }, todasSelecionadas ? "☐ Desmarcar todas" : "☑ Selecionar todas"), /*#__PURE__*/React.createElement("button", {
+    onClick: imprimirPedidosFiado,
+    style: {
+      ...S.btn("ghost"),
+      flex: 1,
+      padding: "8px",
+      fontSize: 12
+    }
+  }, "🖨️ Imprimir pedidos"), /*#__PURE__*/React.createElement("button", {
+    onClick: imprimirProdutosFiado,
+    style: {
+      ...S.btn("ghost"),
+      flex: 1,
+      padding: "8px",
+      fontSize: 12
+    }
+  }, "🖨️ Imprimir produtos")), selecionadasCliente.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.card,
+      padding: "10px 12px",
+      marginBottom: 10,
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: "var(--text-secondary)"
+    }
+  }, selecionadasCliente.length + " nota(s) selecionada(s)"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 16,
+      fontWeight: 800,
+      color: "#f59e0b"
+    }
+  }, "Soma: " + fmt(somaSelecionadas))), selecionadas.length > 0 && /*#__PURE__*/React.createElement("button", {
     onClick: marcarPagas,
     style: {
       ...S.btn("primary"),
@@ -13989,6 +14684,16 @@ function PDVApp() {
     label: "Relatórios",
     icon: "receipt",
     perm: (currentUser === null || currentUser === void 0 ? void 0 : currentUser.role) === "admin"
+  }, {
+    id: "fiado",
+    label: "Fiado",
+    icon: "receipt",
+    perm: perm("fiado")
+  }, {
+    id: "agente",
+    label: "Agente IA",
+    icon: "box",
+    perm: perm("agente")
   }].filter(n => n.perm);
   const goTo = id => {
     setPage(id);
@@ -15435,6 +16140,15 @@ function PDVApp() {
     persistS: persistS,
     products: products,
     onReload: reloadFromSupabase
+  }), page === "fiado" && /*#__PURE__*/React.createElement(FiadoPage, {
+    S: S,
+    sales: sales,
+    notify: notify
+  }), page === "agente" && /*#__PURE__*/React.createElement(AgentePage, {
+    S: S,
+    products: products,
+    persistP: persistP,
+    notify: notify
   }), page === "usuarios" && /*#__PURE__*/React.createElement(UsersPage, {
     S: S,
     notify: notify,
