@@ -9812,7 +9812,7 @@ function AgentePage(props) {
 
   const chamarAgente = async msgs => {
     const key = _SB_KEY();
-    const r = await fetch(SUPABASE_URL + "/functions/v1/agente", {
+    const r = await fetch(SUPABASE_URL + "/functions/v1/swift-responder", {
       method: "POST",
       headers: { "Content-Type": "application/json", apikey: key, Authorization: "Bearer " + key },
       body: JSON.stringify({ messages: msgs })
