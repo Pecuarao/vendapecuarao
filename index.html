@@ -9716,7 +9716,7 @@ function FiadoPage(props) {
 }
 
 // ── Agente de IA: conversa, ações com confirmação e histórico para desfazer ──
-const AGENTE_ESCRITAS = ["cadastrar_produto", "alterar_preco", "alterar_estoque"];
+const AGENTE_ESCRITAS = ["cadastrar_produto", "alterar_preco", "alterar_estoque", "alterar_minimo"];
 function AgentePage(props) {
   const h = React.createElement;
   const S = props.S,
@@ -9756,13 +9756,30 @@ function AgentePage(props) {
   const executarLeitura = (name, input) => {
     if (name === "buscar_produtos") {
       const t = String(input.termo || "").toLowerCase().trim();
-      const achados = products.filter(p => (p.name || "").toLowerCase().includes(t) || String(p.barcode || "").includes(t)).slice(0, 15);
-      return JSON.stringify(achados.map(p => ({ id: p.id, nome: p.name, codigo_barras: p.barcode || "", preco: p.price, estoque: p.stock, categoria: p.category || "" })));
+      const limite = Math.min(Math.max(Number(input.limite) || 15, 1), 300);
+      const achados = products.filter(p =>
+        (p.name || "").toLowerCase().includes(t) ||
+        String(p.barcode || "").includes(t) ||
+        String(p.category || "").toLowerCase().includes(t)
+      ).slice(0, limite);
+      return JSON.stringify(achados.map(p => ({
+        id: p.id,
+        nome: p.name,
+        codigo_barras: p.barcode || "",
+        preco: p.price,
+        estoque: p.stock,
+        estoque_minimo: p.minStock === undefined ? 5 : +p.minStock,
+        categoria: p.category || ""
+      })));
     }
     return JSON.stringify({ erro: "ferramenta desconhecida" });
   };
 
   const resumoEscrita = (name, input) => {
+    if (name === "alterar_minimo") {
+      const nomes = (input.produto_ids || []).map(id => products.find(x => x.id === id)).filter(Boolean);
+      return "Estoque mínimo → " + (+input.minimo || 0) + " em " + nomes.length + " produto(s): " + nomes.slice(0, 8).map(x => x.name).join(", ") + (nomes.length > 8 ? " e mais " + (nomes.length - 8) : "");
+    }
     if (name === "cadastrar_produto") return "Cadastrar \"" + input.nome + "\" (cód. " + (input.codigo_barras || "—") + ") · " + fmt(+input.preco || 0) + " · estoque " + (+input.estoque || 0);
     const p = products.find(x => x.id === input.produto_id);
     const nome = p ? p.name : "(produto não encontrado)";
@@ -9791,6 +9808,21 @@ function AgentePage(props) {
     const out = {};
     const novasAcoes = [];
     escritas.forEach(e => {
+      if (e.name === "alterar_minimo") {
+        const minimo = Math.max(0, +e.input.minimo || 0);
+        const itensAcao = [];
+        (e.input.produto_ids || []).forEach(id => {
+          const p = lista.find(x => x.id === id);
+          const atual = p ? (p.minStock === undefined ? 5 : +p.minStock) : null;
+          if (!p || atual === minimo) return;
+          const depois = { ...p, minStock: minimo };
+          lista = lista.map(x => x.id === id ? depois : x);
+          itensAcao.push({ antes: p, depois: depois });
+        });
+        out[e.id] = JSON.stringify({ ok: true, alterados: itensAcao.length, minimo: minimo });
+        if (itensAcao.length) novasAcoes.push({ id: uid(), quando: Date.now(), descricao: "Estoque mínimo → " + minimo + " em " + itensAcao.length + " produto(s)", itens: itensAcao, desfeita: false });
+        return;
+      }
       const r = aplicarEscrita(lista, e.name, e.input);
       lista = r.lista;
       out[e.id] = JSON.stringify(r.ok ? { ok: true, mensagem: r.msg } : { ok: false, erro: r.msg });
@@ -9806,9 +9838,12 @@ function AgentePage(props) {
   };
 
   const desfazer = acao => {
-    const lista = acao.antes === null
-      ? products.filter(p => p.id !== acao.depois.id)
-      : products.map(p => p.id === acao.antes.id ? acao.antes : p);
+    let lista = [...products];
+    (acao.itens || [acao]).forEach(it => {
+      lista = it.antes === null
+        ? lista.filter(p => p.id !== it.depois.id)
+        : lista.map(p => p.id === it.antes.id ? it.antes : p);
+    });
     persistP(lista);
     const h2 = historico.map(x => x.id === acao.id ? { ...x, desfeita: true } : x);
     setHistorico(h2);
