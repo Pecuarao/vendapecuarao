@@ -953,6 +953,21 @@ const _toRow = {
     obs: f.obs || '',
     created_at: f.createdAt || Date.now()
   }),
+  orcamentos: o => ({
+    id: o.id,
+    numero: o.numero || '',
+    cliente: o.cliente || '',
+    telefone: o.telefone || '',
+    data: o.data || '',
+    validade: o.validade || '',
+    itens: o.itens || [],
+    subtotal: +(o.subtotal || 0),
+    desconto: +(o.desconto || 0),
+    total: +(o.total || 0),
+    obs: o.obs || '',
+    status: o.status || 'aberto',
+    criado_em: o.criado_em || Date.now()
+  }),
   fiado_pagamentos: p => ({
     id: p.id,
     sale_id: p.saleId || '',
@@ -3751,6 +3766,9 @@ function UsersPage(_ref11) {
     k: "fiado",
     l: "Fiado"
   }, {
+    k: "orcamentos",
+    l: "Orçamentos"
+  }, {
     k: "agente",
     l: "Agente IA"
   }, {
@@ -4767,16 +4785,18 @@ function CartDrawer(_ref18) {
     onFinalizeEntrega = _ref18.onFinalizeEntrega,
     onCadastrarCliente = _ref18.onCadastrarCliente,
     onClose = _ref18.onClose,
-    onUpdateProduct = _ref18.onUpdateProduct;
+    onUpdateProduct = _ref18.onUpdateProduct,
+    orcModo = _ref18.orcModo,
+    avulsoInicial = _ref18.avulsoInicial;
   const _useState43 = useState(false),
     _useState44 = _slicedToArray(_useState43, 2),
     isEntrega = _useState44[0],
     setIsEntrega = _useState44[1];
-  const _useState45 = useState(""),
+  const _useState45 = useState(() => (avulsoInicial && avulsoInicial.nome) || ""),
     _useState46 = _slicedToArray(_useState45, 2),
     avNome = _useState46[0],
     setAvNome = _useState46[1];
-  const _useStateAvTel = useState(""),
+  const _useStateAvTel = useState(() => (avulsoInicial && avulsoInicial.telefone) || ""),
     _useStateAvTel2 = _slicedToArray(_useStateAvTel, 2),
     avTelefone = _useStateAvTel2[0],
     setAvTelefone = _useStateAvTel2[1];
@@ -5685,7 +5705,7 @@ function CartDrawer(_ref18) {
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "check",
     size: 16
-  }), " Finalizar Venda"), cart.length > 0 && /*#__PURE__*/React.createElement("button", {
+  }), (orcModo ? " Salvar Orçamento" : " Finalizar Venda")), cart.length > 0 && /*#__PURE__*/React.createElement("button", {
     onClick: () => rmCart("__all__"),
     style: {
       ...S.btn("danger"),
@@ -10021,6 +10041,250 @@ function AgentePage(props) {
           : h("button", { onClick: () => desfazer(a), style: { ...S.btn("ghost"), padding: "2px 8px", fontSize: 11 } }, "↩️ Desfazer")))));
 }
 
+// ── Orçamentos para cliente: montar, imprimir, enviar pelo WhatsApp, aprovar/recusar ──
+function OrcamentosPage(props) {
+  const h = React.createElement;
+  const S = props.S,
+    products = props.products || [],
+    notify = props.notify;
+  const [lista, setLista] = useState(() => load("pdv_orcamentos", []));
+  const [editando, setEditando] = useState(null);
+  const [filtro, setFiltro] = useState("todos");
+  const [buscaProd, setBuscaProd] = useState("");
+  const hoje = todayStr();
+  const lblStyle = { fontSize: 11, color: "var(--text-secondary)", textTransform: "uppercase" };
+
+  useEffect(() => {
+    syncLoadTable("orcamentos").then(rows => {
+      if (!Array.isArray(rows)) return;
+      const doServidor = rows.map(r => ({
+        id: r.id,
+        numero: r.numero || "",
+        cliente: r.cliente || "",
+        telefone: r.telefone || "",
+        data: r.data || "",
+        validade: r.validade || "",
+        itens: Array.isArray(r.itens) ? r.itens : [],
+        desconto: +(r.desconto || 0),
+        obs: r.obs || "",
+        status: r.status || "aberto",
+        criado_em: r.criado_em || Date.now()
+      }));
+      const tomb = new Set(getTombstones()["orcamentos"] || []);
+      setLista(prev => {
+        const merged = mergeById(prev, doServidor, tomb, "orcamentos");
+        save("pdv_orcamentos", merged);
+        return merged;
+      });
+    });
+  }, []);
+
+  const totaisDe = o => {
+    const subtotal = (o.itens || []).reduce((s, i) => s + (+i.price || 0) * (+i.qty || 0), 0);
+    const desconto = Math.min(Math.max(0, +o.desconto || 0), subtotal);
+    return { subtotal: subtotal, desconto: desconto, total: subtotal - desconto };
+  };
+  const novoOrc = () => ({
+    id: uid(),
+    numero: String(Date.now()).slice(-5),
+    cliente: "",
+    telefone: "",
+    data: hoje,
+    validade: addDias(hoje, 7),
+    itens: [],
+    desconto: 0,
+    obs: "",
+    status: "aberto",
+    criado_em: Date.now()
+  });
+  const vencido = o => o.status === "aberto" && o.validade && o.validade < hoje;
+  const rotuloStatus = o => o.status === "aprovado" ? "✅ Aprovado" : o.status === "recusado" ? "❌ Recusado" : vencido(o) ? "⌛ Vencido" : "🟡 Aberto";
+
+  // Grava (cria ou atualiza) sem fechar a tela
+  const gravar = o => {
+    const t = totaisDe(o);
+    const registro = { ...o, subtotal: t.subtotal, desconto: t.desconto, total: t.total };
+    const existe = lista.some(x => x.id === o.id);
+    const v = existe ? lista.map(x => x.id === o.id ? registro : x) : [registro, ...lista];
+    setLista(v);
+    save("pdv_orcamentos", v);
+    syncSaveOne("orcamentos", registro);
+  };
+  const salvarOrc = o => {
+    gravar(o);
+    notify("Orçamento salvo ✓", "success");
+    setEditando(null);
+  };
+  const excluir = o => {
+    if (!window.confirm("Excluir o orçamento " + o.numero + " de " + (o.cliente || "cliente") + "?")) return;
+    const v = lista.filter(x => x.id !== o.id);
+    setLista(v);
+    save("pdv_orcamentos", v);
+    addTombstone("orcamentos", o.id);
+    syncDeleteOne("orcamentos", o.id).then(ok => {
+      if (ok) clearTombstone("orcamentos", o.id);
+    });
+  };
+
+  const imprimir = o => {
+    const t = totaisDe(o);
+    const th = "style='text-align:left;padding:8px;border-bottom:2px solid #333;font-size:12px'";
+    const thR = "style='text-align:right;padding:8px;border-bottom:2px solid #333;font-size:12px'";
+    const td = "style='padding:7px 8px;border-bottom:1px solid #ddd;font-size:12px'";
+    const tdR = "style='padding:7px 8px;border-bottom:1px solid #ddd;font-size:12px;text-align:right'";
+    const linhas = (o.itens || []).map(i => "<tr><td " + td + ">" + i.name + "</td><td " + tdR + ">" + i.qty + "</td><td " + tdR + ">" + fmt(+i.price || 0) + "</td><td " + tdR + ">" + fmt((+i.price || 0) * (+i.qty || 0)) + "</td></tr>").join("");
+    const html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Orçamento " + o.numero + "</title></head><body style='font-family:Arial,sans-serif;padding:30px;color:#222'>" +
+      "<h2 style='color:#E8682A;margin:0 0 4px'>Orçamento nº " + o.numero + "</h2>" +
+      "<div style='color:#666;font-size:13px;margin-bottom:12px'>Pecuarão Gontijo</div>" +
+      "<div style='font-size:14px;margin-bottom:4px'><b>Cliente:</b> " + (o.cliente || "—") + (o.telefone ? " · " + o.telefone : "") + "</div>" +
+      "<div style='font-size:13px;color:#444;margin-bottom:16px'>Data: " + o.data + " · Válido até: " + o.validade + "</div>" +
+      "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Produto</th><th " + thR + ">Qtd</th><th " + thR + ">Preço</th><th " + thR + ">Subtotal</th></tr>" + linhas + "</table>" +
+      "<p style='text-align:right;font-size:13px;margin-top:12px'>Subtotal: " + fmt(t.subtotal) + "<br>Desconto: -" + fmt(t.desconto) + "</p>" +
+      "<p style='text-align:right;font-size:16px'><b>TOTAL: " + fmt(t.total) + "</b></p>" +
+      (o.obs ? "<p style='font-size:12px;color:#555'>Obs.: " + o.obs + "</p>" : "") +
+      "</body></html>";
+    printHTMLDoc(html, "Orçamento " + o.numero);
+  };
+
+  const enviarWhats = o => {
+    const t = totaisDe(o);
+    const linhas = (o.itens || []).map(i => "• " + i.qty + "x " + i.name + " — " + fmt((+i.price || 0) * (+i.qty || 0)));
+    const texto = "Orçamento nº " + o.numero + "\n" + linhas.join("\n") + (t.desconto > 0 ? "\nDesconto: -" + fmt(t.desconto) : "") + "\nTotal: " + fmt(t.total) + "\nValidade: " + o.validade;
+    const tel = String(o.telefone || "").replace(/\D/g, "");
+    const numero = tel ? (tel.length > 11 ? tel : "55" + tel) : "";
+    const url = (numero ? "https://wa.me/" + numero : "https://wa.me/") + "?text=" + encodeURIComponent(texto);
+    window.open(url, "_blank");
+  };
+
+  const acao = (label, fn, extra) => h("button", {
+    onClick: e => { e.stopPropagation(); fn(); },
+    style: { ...S.btn("ghost"), padding: "4px 10px", fontSize: 11, ...(extra || {}) }
+  }, label);
+
+  const renderForm = () => {
+    const o = editando;
+    const t = totaisDe(o);
+    const termo = buscaProd.trim().toLowerCase();
+    const achados = termo.length < 2 ? [] : products.filter(p => (p.name || "").toLowerCase().includes(termo) || String(p.barcode || "").includes(termo)).slice(0, 8);
+    const addItem = p => {
+      setEditando(e => ({ ...e, itens: [...(e.itens || []), { id: p.id, name: p.name, qty: 1, price: p.price || 0 }] }));
+      setBuscaProd("");
+    };
+    const setItem = (idx, campo, valor) => setEditando(e => ({ ...e, itens: e.itens.map((it, i) => i === idx ? { ...it, [campo]: valor } : it) }));
+    const delItem = idx => setEditando(e => ({ ...e, itens: e.itens.filter((_, i) => i !== idx) }));
+    const campo = (label, valor, onChange, tipo) => h("div", { style: { marginBottom: 8 } },
+      h("div", { style: { ...lblStyle, marginBottom: 4 } }, label),
+      h("input", { style: { ...S.input }, type: tipo || "text", value: valor, onChange: e => onChange(e.target.value) }));
+    return h("div", null,
+      h("button", { onClick: () => setEditando(null), style: { ...S.btn("ghost"), marginBottom: 12, fontSize: 12, padding: "6px 12px" } }, "← Voltar"),
+      h("div", { style: { ...S.card, padding: 14 } },
+        campo("Cliente", o.cliente, v => setEditando(e => ({ ...e, cliente: v }))),
+        campo("Telefone (WhatsApp)", o.telefone, v => setEditando(e => ({ ...e, telefone: v }))),
+        campo("Válido até", o.validade, v => setEditando(e => ({ ...e, validade: v })), "date"),
+        h("div", { style: { ...lblStyle, marginBottom: 4 } }, "Adicionar produto"),
+        h("input", { style: { ...S.input, marginBottom: 6 }, placeholder: "Buscar por nome ou código...", value: buscaProd, onChange: e => setBuscaProd(e.target.value) }),
+        achados.map(p => h("div", {
+          key: p.id,
+          onClick: () => addItem(p),
+          style: { padding: "8px 10px", borderBottom: "1px solid var(--bg-elevated)", cursor: "pointer", fontSize: 13, display: "flex", justifyContent: "space-between" }
+        }, h("span", null, p.name), h("span", { style: { color: "var(--text-secondary)" } }, fmt(p.price || 0)))),
+        (o.itens || []).map((it, idx) => h("div", {
+          key: idx,
+          style: { display: "flex", gap: 6, alignItems: "center", padding: "6px 0", borderBottom: "1px solid var(--bg-elevated)" }
+        },
+          h("div", { style: { flex: 1, fontSize: 13 } }, it.name),
+          h("input", { style: { ...S.input, width: 60, padding: "6px" }, type: "number", min: "1", value: it.qty, onChange: e => setItem(idx, "qty", +e.target.value || 0) }),
+          h("input", { style: { ...S.input, width: 90, padding: "6px" }, type: "number", step: "0.01", value: it.price, onChange: e => setItem(idx, "price", +e.target.value || 0) }),
+          h("button", { onClick: () => delItem(idx), style: { ...S.btn("ghost"), padding: "4px 8px", color: "#ef4444" } }, "✕"))),
+        campo("Desconto (R$)", o.desconto, v => setEditando(e => ({ ...e, desconto: +v || 0 })), "number"),
+        campo("Observações", o.obs, v => setEditando(e => ({ ...e, obs: v }))),
+        h("div", { style: { fontSize: 12, color: "var(--text-secondary)", marginTop: 6 } }, "Subtotal: " + fmt(t.subtotal) + " · Desconto: -" + fmt(t.desconto)),
+        h("div", { style: { fontSize: 18, fontWeight: 800, color: "#4ade80", marginBottom: 12 } }, "Total: " + fmt(t.total)),
+        (o.itens || []).length > 0 && h("button", {
+          onClick: () => enviarWhats(o),
+          style: { ...S.btn("primary"), width: "100%", padding: 10, marginBottom: 8, background: "#25D366", borderColor: "#25D366" }
+        }, (String(o.telefone || "").replace(/\D/g, "").length >= 8 ? "💬 Enviar para " + o.telefone : "💬 Enviar pelo WhatsApp (escolher contato)")),
+        h("div", { style: { display: "flex", gap: 6 } },
+          h("button", { onClick: () => setEditando(null), style: { ...S.btn("ghost"), flex: 1, padding: 10 } }, "Cancelar"),
+          h("button", {
+            onClick: () => {
+              if (!(o.cliente || "").trim()) return notify("Informe o cliente", "error");
+              if (!(o.itens || []).length) return notify("Adicione pelo menos um produto", "error");
+              salvarOrc(o);
+            },
+            style: { ...S.btn("primary"), flex: 1, padding: 10 }
+          }, "Salvar"))));
+  };
+
+  if (editando) return renderForm();
+
+  const listaFiltrada = lista
+    .filter(o => filtro === "todos" ? true : filtro === "vencido" ? vencido(o) : o.status === filtro)
+    .sort((a, b) => (b.criado_em || 0) - (a.criado_em || 0));
+
+  return h("div", null,
+    h("button", {
+      onClick: () => props.onNovo && props.onNovo(),
+      style: { ...S.btn("primary"), width: "100%", padding: 10, marginBottom: 12 }
+    }, "+ Novo orçamento"),
+    h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 } },
+      [["todos", "Todos"], ["aberto", "Abertos"], ["vencido", "Vencidos"], ["aprovado", "Aprovados"], ["recusado", "Recusados"]].map(p =>
+        h("button", { key: p[0], onClick: () => setFiltro(p[0]), style: { ...S.btn(filtro === p[0] ? "primary" : "ghost"), padding: "6px 12px", fontSize: 12 } }, p[1]))),
+    listaFiltrada.length === 0
+      ? h("div", { style: { textAlign: "center", color: "var(--text-secondary)", padding: 20 } }, "Nenhum orçamento nesta lista.")
+      : listaFiltrada.map(o => {
+          const t = totaisDe(o);
+          return h("div", {
+            key: o.id,
+            onClick: () => props.onEditar && props.onEditar(o),
+            style: { ...S.card, padding: "12px 14px", marginBottom: 8, cursor: "pointer" }
+          },
+            h("div", { style: { display: "flex", justifyContent: "space-between", gap: 8 } },
+              h("div", null,
+                h("div", { style: { fontWeight: 700 } }, "Nº " + o.numero + " · " + (o.cliente || "Sem cliente")),
+                h("div", { style: { fontSize: 12, color: "var(--text-secondary)" } }, o.data + " · válido até " + o.validade)),
+              h("div", { style: { textAlign: "right" } },
+                h("div", { style: { fontWeight: 800 } }, fmt(t.total)),
+                h("div", { style: { fontSize: 11 } }, rotuloStatus(o)))),
+            h("div", { style: { display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" } },
+              acao("🖨️ Imprimir", () => imprimir(o)),
+              acao("💬 WhatsApp", () => enviarWhats(o)),
+              o.status !== "aprovado" && acao("✅ Aprovar", () => gravar({ ...o, status: "aprovado" })),
+              o.status !== "recusado" && acao("❌ Recusar", () => gravar({ ...o, status: "recusado" })),
+              acao("🗑️", () => excluir(o), { color: "#ef4444" })));
+        }));
+}
+
+// ── Importar orçamento no PDV: lista os orçamentos abertos/aprovados para carregar no carrinho ──
+function ImportarOrcModal(props) {
+  const h = React.createElement;
+  const S = props.S;
+  const lista = load("pdv_orcamentos", [])
+    .filter(o => o.status !== "recusado")
+    .sort((a, b) => (b.criado_em || 0) - (a.criado_em || 0));
+  return h("div", {
+    onClick: props.onClose,
+    style: { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,.55)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }
+  },
+    h("div", {
+      onClick: e => e.stopPropagation(),
+      style: { ...S.card, width: "100%", maxWidth: 480, maxHeight: "80vh", overflowY: "auto", padding: 16 }
+    },
+      h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 } },
+        h("div", { style: { fontWeight: 800 } }, "📋 Importar orçamento"),
+        h("button", { onClick: props.onClose, style: { ...S.btn("ghost"), padding: "4px 10px" } }, "✕")),
+      lista.length === 0
+        ? h("div", { style: { textAlign: "center", color: "var(--text-secondary)", padding: 20 } }, "Nenhum orçamento disponível.")
+        : lista.map(o => h("div", {
+            key: o.id,
+            style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "10px 0", borderBottom: "1px solid var(--bg-elevated)" }
+          },
+            h("div", null,
+              h("div", { style: { fontWeight: 700, fontSize: 13 } }, "Nº " + o.numero + " · " + (o.cliente || "Sem cliente")),
+              h("div", { style: { fontSize: 11, color: "var(--text-secondary)" } }, o.data + " · " + (o.status === "aprovado" ? "aprovado" : "aberto") + " · " + fmt(o.total || 0))),
+            h("button", { onClick: () => props.onUsar(o), style: { ...S.btn("primary"), padding: "6px 12px", fontSize: 12 } }, "Usar")))));
+}
+
 function EntregasPage(_ref24) {
   let S = _ref24.S,
     sales = _ref24.sales,
@@ -13606,6 +13870,13 @@ function PDVApp() {
     _useStateUsers2 = _slicedToArray(_useStateUsers, 2),
     users = _useStateUsers2[0],
     setUsers = _useStateUsers2[1];
+  const [orcModo, setOrcModo] = useState(false);
+  const [orcTel, setOrcTel] = useState("");
+  const [orcEditId, setOrcEditId] = useState(null);
+  const [orcImportId, setOrcImportId] = useState(null);
+  const [importOrcOpen, setImportOrcOpen] = useState(false);
+  const [avulsoInicial, setAvulsoInicial] = useState(null);
+  useEffect(() => { if (page !== "pdv") setOrcModo(false); }, [page]);
   const _useState191 = useState([]),
     _useState192 = _slicedToArray(_useState191, 2),
     cart = _useState192[0],
@@ -14043,6 +14314,10 @@ function PDVApp() {
       notify("Carrinho vazio!", "error");
       return;
     }
+    if (orcModo) {
+      salvarOrcamentoCarrinho();
+      return;
+    }
     const saleId = uid();
     const nomeCliente = nomeEntrega || saleCustomer;
     const newSale = {
@@ -14064,6 +14339,11 @@ function PDVApp() {
       vendedor: (currentUser === null || currentUser === void 0 ? void 0 : currentUser.name) || ""
     };
     persistS([newSale, ...sales]);
+    if (orcImportId) {
+      marcarOrcamentoAprovado(orcImportId);
+      setOrcImportId(null);
+      setAvulsoInicial(null);
+    }
     const itensCarrinho = cart.map(i => ({
       id: i.id,
       qty: i.qty
@@ -14127,6 +14407,103 @@ function PDVApp() {
     setSaleCustomer("Avulso");
     setSaleDesconto(0);
     setCartOpen(false);
+  };
+  // ── Modo orçamento: mesma tela do PDV, mas grava orçamento (sem venda, sem estoque, sem histórico de vendas)
+  const itensDoOrcamento = itens => (itens || []).map(i => {
+    const p = products.find(x => x.id === i.id);
+    return p
+      ? { ...p, name: i.name || p.name, price: +i.price || 0, qty: +i.qty || 1 }
+      : { id: i.id, name: i.name, price: +i.price || 0, qty: +i.qty || 1, stock: 999999, costPrice: 0 };
+  });
+  const novoOrcamentoPDV = () => {
+    setCart([]);
+    setSaleCustomer("");
+    setSaleDesconto(0);
+    setOrcTel("");
+    setOrcEditId(null);
+    setOrcImportId(null);
+    setOrcModo(true);
+    setPage("pdv");
+  };
+  const editarOrcamentoPDV = o => {
+    setCart(itensDoOrcamento(o.itens));
+    setSaleCustomer(o.cliente || "");
+    setSaleDesconto(o.desconto || 0);
+    setOrcTel(o.telefone || "");
+    setOrcEditId(o.id);
+    setOrcImportId(null);
+    setOrcModo(true);
+    setPage("pdv");
+  };
+  const sairOrcamento = () => {
+    setCart([]);
+    setSaleCustomer("");
+    setSaleDesconto(0);
+    setOrcTel("");
+    setOrcEditId(null);
+    setOrcModo(false);
+    setPage("orcamentos");
+  };
+  const salvarOrcamentoCarrinho = () => {
+    if (cart.length === 0) { notify("Carrinho vazio!", "error"); return; }
+    const listaOrc = load("pdv_orcamentos", []);
+    const base = orcEditId ? listaOrc.find(o => o.id === orcEditId) || null : null;
+    const hojeOrc = todayStr();
+    const itens = cart.map(i => ({ id: i.id, name: i.name, qty: i.qty, price: i.price }));
+    const subtotal = itens.reduce((s, i) => s + (+i.price || 0) * (+i.qty || 0), 0);
+    const desconto = Math.min(Math.max(0, +saleDesconto || 0), subtotal);
+    const reg = {
+      id: base ? base.id : uid(),
+      numero: base ? base.numero : String(Date.now()).slice(-5),
+      cliente: saleCustomer || "",
+      telefone: orcTel || "",
+      data: base ? base.data : hojeOrc,
+      validade: base && base.validade ? base.validade : addDias(hojeOrc, 7),
+      itens: itens,
+      subtotal: subtotal,
+      desconto: desconto,
+      total: subtotal - desconto,
+      obs: base ? base.obs || "" : "",
+      status: base ? base.status : "aberto",
+      criado_em: base ? base.criado_em : Date.now()
+    };
+    const v = base ? listaOrc.map(o => o.id === reg.id ? reg : o) : [reg, ...listaOrc];
+    save("pdv_orcamentos", v);
+    syncSaveOne("orcamentos", reg);
+    notify("Orçamento salvo ✓", "success");
+    sairOrcamento();
+  };
+  const enviarWhatsCarrinho = () => {
+    if (cart.length === 0) { notify("Carrinho vazio!", "error"); return; }
+    const linhas = cart.map(i => "• " + i.qty + "x " + i.name + " — " + fmt((+i.price || 0) * (+i.qty || 0)));
+    const texto = "Orçamento\n" + linhas.join("\n") + (saleDesconto > 0 ? "\nDesconto: -" + fmt(saleDesconto) : "") + "\nTotal: " + fmt(cartTotalFinal) + "\nValidade: " + addDias(todayStr(), 7);
+    const tel = String(orcTel || "").replace(/\D/g, "");
+    const numero = tel ? (tel.length > 11 ? tel : "55" + tel) : "";
+    window.open((numero ? "https://wa.me/" + numero : "https://wa.me/") + "?text=" + encodeURIComponent(texto), "_blank");
+  };
+  const marcarOrcamentoAprovado = id => {
+    const v = load("pdv_orcamentos", []).map(o => o.id === id ? { ...o, status: "aprovado" } : o);
+    save("pdv_orcamentos", v);
+    const reg = v.find(o => o.id === id);
+    if (reg) syncSaveOne("orcamentos", reg);
+  };
+  const usarOrcamento = o => {
+    setCart(itensDoOrcamento(o.itens));
+    const cadastrado = !!o.cliente && customers.some(c => c.name === o.cliente);
+    if (cadastrado) {
+      setSaleCustomer(o.cliente);
+      setAvulsoInicial(null);
+    } else {
+      // Cliente sem cadastro: usa "Avulso" para aparecer o campo de endereço na entrega
+      setSaleCustomer("Avulso");
+      setAvulsoInicial({ nome: o.cliente || "", telefone: o.telefone || "" });
+    }
+    setSaleDesconto(o.desconto || 0);
+    setOrcImportId(o.id);
+    setOrcModo(false);
+    setImportOrcOpen(false);
+    setPage("pdv");
+    notify("Orçamento importado no carrinho ✓", "success");
   };
   const finalizeSale = () => doFinalizeSale(false);
   const finalizeSaleComEntrega = (endereco, nome, obs, telefone) => doFinalizeSale(true, endereco, nome, obs, telefone);
@@ -14701,10 +15078,10 @@ function PDVApp() {
     return (currentUser === null || currentUser === void 0 ? void 0 : currentUser.role) === "admin" || (currentUser === null || currentUser === void 0 || (_currentUser$permissi = currentUser.permissions) === null || _currentUser$permissi === void 0 ? void 0 : _currentUser$permissi[k]) === true;
   };
   const NAV = [{
-    id: "dashboard",
-    label: "Dashboard",
-    icon: "home",
-    perm: (currentUser === null || currentUser === void 0 ? void 0 : currentUser.role) === "admin" || ((currentUser === null || currentUser === void 0 ? void 0 : (currentUser.permissions || {}).dashboardModo) || "completo") !== "oculto"
+    id: "orcamentos",
+    label: "Orçamentos",
+    icon: "receipt",
+    perm: perm("orcamentos")
   }, {
     id: "pdv",
     label: "PDV / Vendas",
@@ -14770,6 +15147,11 @@ function PDVApp() {
     label: "Agente IA",
     icon: "box",
     perm: perm("agente")
+  }, {
+    id: "dashboard",
+    label: "Dashboard",
+    icon: "home",
+    perm: (currentUser === null || currentUser === void 0 ? void 0 : currentUser.role) === "admin" || ((currentUser === null || currentUser === void 0 ? void 0 : (currentUser.permissions || {}).dashboardModo) || "completo") !== "oculto"
   }].filter(n => n.perm);
   const goTo = id => {
     setPage(id);
@@ -15609,7 +15991,9 @@ function PDVApp() {
     }
   }, p.name), /*#__PURE__*/React.createElement("span", {
     style: S.badge(p.stock === 0 ? "#ff3b3b" : "#F07030")
-  }, p.stock === 0 ? "Esgotado" : p.stock + " unid.")))))), page === "pdv" && (products.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
+  }, p.stock === 0 ? "Esgotado" : p.stock + " unid.")))))), (page === "pdv" && orcModo) && /*#__PURE__*/React.createElement("div", {
+    style: { ...S.card, padding: 12, marginBottom: 10, border: "1px solid #E8682A" }
+  }, /*#__PURE__*/React.createElement("div", { style: { fontWeight: 800, marginBottom: 8 } }, "📋 Modo orçamento: não gera venda nem baixa estoque"), /*#__PURE__*/React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } }, /*#__PURE__*/React.createElement("input", { style: { ...S.input, flex: 1, minWidth: 140 }, placeholder: "Cliente", value: saleCustomer || "", onChange: e => setSaleCustomer(e.target.value) }), /*#__PURE__*/React.createElement("input", { style: { ...S.input, flex: 1, minWidth: 140 }, placeholder: "Telefone (WhatsApp)", value: orcTel, onChange: e => setOrcTel(e.target.value) })), /*#__PURE__*/React.createElement("div", { style: { display: "flex", gap: 6, marginTop: 6 } }, /*#__PURE__*/React.createElement("button", { onClick: enviarWhatsCarrinho, style: { ...S.btn("primary"), flex: 1, background: "#25D366", borderColor: "#25D366" } }, "💬 WhatsApp"), /*#__PURE__*/React.createElement("button", { onClick: sairOrcamento, style: { ...S.btn("ghost"), flex: 1 } }, "← Lista de orçamentos"))), page === "pdv" && (products.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
     icon: "\uD83D\uDCE6",
     title: "Nenhum produto",
     desc: "Importe uma NF-e ou cadastre produtos.",
@@ -15708,8 +16092,8 @@ function PDVApp() {
     size: 17,
     color: "#4A5BC4"
   })), /*#__PURE__*/React.createElement("button", {
-    onClick: () => setBalancaCfgOpen(true),
-    title: "Configurar balan\xE7a",
+    onClick: () => setImportOrcOpen(true),
+    title: "Importar orçamento",
     style: {
       ...S.btn("ghost"),
       padding: "10px 12px",
@@ -15717,7 +16101,7 @@ function PDVApp() {
       borderRadius: 10
     }
   }, /*#__PURE__*/React.createElement(Icon, {
-    name: "sliders",
+    name: "receipt",
     size: 17,
     color: "#94a3b8"
   })), /*#__PURE__*/React.createElement("button", {
@@ -16186,6 +16570,10 @@ function PDVApp() {
       setScannerOpen(false);
     },
     onClose: () => setScannerOpen(false)
+  }), importOrcOpen && /*#__PURE__*/React.createElement(ImportarOrcModal, {
+    S: S,
+    onUsar: usarOrcamento,
+    onClose: () => setImportOrcOpen(false)
   }), balancaCfgOpen && /*#__PURE__*/React.createElement(BalancaCfgModal, {
     S: S,
     onClose: () => setBalancaCfgOpen(false)
@@ -16220,6 +16608,12 @@ function PDVApp() {
     S: S,
     sales: sales,
     notify: notify
+  }), page === "orcamentos" && /*#__PURE__*/React.createElement(OrcamentosPage, {
+    S: S,
+    products: products,
+    notify: notify,
+    onNovo: novoOrcamentoPDV,
+    onEditar: editarOrcamentoPDV
   }), page === "agente" && /*#__PURE__*/React.createElement(AgentePage, {
     S: S,
     products: products,
@@ -17505,6 +17899,8 @@ function PDVApp() {
     cartTotal: cartTotal,
     cartTotalFinal: cartTotalFinal,
     onFinalize: finalizeSale,
+    orcModo: orcModo,
+    avulsoInicial: avulsoInicial,
     onFinalizeEntrega: finalizeSaleComEntrega,
     onCadastrarCliente: cadastrarClienteAvulso,
     onClose: () => setCartOpen(false)
