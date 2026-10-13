@@ -7350,6 +7350,16 @@ function ListaComprasPage(_ref20) {
     persist(items.map(i => i.id === id ? { ...i, fase } : i));
     setFaseMenu(null);
   };
+  const achaProduto = (item, nome) => {
+    if (!item) return null;
+    const bc = String(item.barcode || "").trim();
+    if (bc) {
+      const porCodigo = products.find(x => String(x.barcode || "") === bc);
+      if (porCodigo) return porCodigo;
+    }
+    const n = String(nome || item.name || "").trim().toLowerCase();
+    return n ? (products.find(x => String(x.name || "").trim().toLowerCase() === n) || null) : null;
+  };
   const confirmarComprado = () => {
     if (!compradoModal) return;
     const nome = compradoNome.trim();
@@ -7465,8 +7475,15 @@ function ListaComprasPage(_ref20) {
     onChange: e => setCompradoPrecoVenda(e.target.value),
     placeholder: "0,00",
     inputMode: "decimal",
-    style: { ...S.input, marginBottom: 20 }
+    style: { ...S.input, marginBottom: 6 }
   }),
+  (() => {
+    const pa = achaProduto(compradoModal, compradoNome);
+    return pa ? /*#__PURE__*/React.createElement("button", {
+      onClick: () => setCompradoPrecoVenda(String(pa.price || "")),
+      style: { ...S.btn("ghost"), padding: "6px 10px", fontSize: 12, marginBottom: 18, color: "#4ade80" }
+    }, "Preço atual de venda: " + fmt(pa.price || 0) + " · usar este") : /*#__PURE__*/React.createElement("div", { style: { marginBottom: 18 } });
+  })(),
   /*#__PURE__*/React.createElement("div", { style: { display: "flex", gap: 10 } },
     /*#__PURE__*/React.createElement("button", {
       onClick: () => setCompradoModal(null),
