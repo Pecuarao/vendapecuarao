@@ -101,12 +101,14 @@ const _diceSim = (t1, t2) => {
   });
   return 2 * inter / (s1.size + s2.size);
 };
+// Todos os códigos de barras de um produto (principal + adicionais)
+const todosCodigosProd = p => [p.barcode, ...(Array.isArray(p.barcodesExtra) ? p.barcodesExtra : [])].map(c => String(c || "").trim()).filter(Boolean);
 // Calcula score de 0 a 100 comparando um item importado (nfItem: {nome, barcode})
 // com um produto já cadastrado (prod: {name, barcode})
 const computeMatchScore = (nfItem, prod) => {
   const eanNF = (nfItem.barcode || "").trim();
   const eanProd = (prod.barcode || "").trim();
-  if (eanNF && eanProd && eanNF === eanProd) return 100;
+  if (eanNF && todosCodigosProd(prod).includes(eanNF)) return 100;
   const t1 = _tokens(nfItem.nome || nfItem.name);
   const t2 = _tokens(prod.name);
   let score = Math.round(_diceSim(t1, t2) * 100);
@@ -2050,7 +2052,9 @@ function ProductSheet(_ref9) {
     onDelete = _ref9.onDelete,
     S = _ref9.S,
     prefillName = _ref9.prefillName,
-    cats = _ref9.cats;
+    cats = _ref9.cats,
+    products = _ref9.products,
+    notify = _ref9.notify;
   const _useState5 = useState({
       name: (initial === null || initial === void 0 ? void 0 : initial.name) || prefillName || "",
       category: (initial === null || initial === void 0 ? void 0 : initial.category) || "Outros",
@@ -2141,6 +2145,12 @@ function ProductSheet(_ref9) {
     const c = (code || "").trim();
     if (!c) return;
     if (c === form.barcode || (form.barcodesExtra || []).includes(c)) return;
+    const outroProd = (products || []).find(p => p.id !== (initial && initial.id) && todosCodigosProd(p).includes(c));
+    if (outroProd) {
+      if (notify) notify('Código ' + c + ' já usado em "' + outroProd.name + '"', "warn");
+      setExtraBCInput("");
+      return;
+    }
     setForm(f => ({
       ...f,
       barcodesExtra: [...(f.barcodesExtra || []), c]
@@ -7229,7 +7239,7 @@ function ListaComprasPage(_ref20) {
     receberQty = _useStateR8[0],
     setReceberQty = _useStateR8[1];
   // Busca produto pelo barcode (principal ou adicional)
-  const matchesBC = (p, code) => p.barcode === code || (Array.isArray(p.barcodesExtra) && p.barcodesExtra.includes(code));
+  const matchesBC = (p, code) => todosCodigosProd(p).includes(String(code || "").trim());
   const findProdByBC = code => (products || []).find(p => matchesBC(p, code));
   // Etiquetas
   const _useStateE1 = useState([]),
@@ -7354,7 +7364,7 @@ function ListaComprasPage(_ref20) {
     if (!item) return null;
     const bc = String(item.barcode || "").trim();
     if (bc) {
-      const porCodigo = products.find(x => String(x.barcode || "") === bc);
+      const porCodigo = products.find(x => todosCodigosProd(x).includes(bc));
       if (porCodigo) return porCodigo;
     }
     const n = String(nome || item.name || "").trim().toLowerCase();
@@ -8496,14 +8506,21 @@ function ImportarPage(_ref21) {
           id: np[idx].id,
           costPrice: np[idx].costPrice,
           stock: np[idx].stock,
-          barcode: np[idx].barcode
+          barcode: np[idx].barcode,
+          barcodesExtra: np[idx].barcodesExtra
         });
+        const bcNF = String(p.barcode || "").trim();
+        const atualProd = np[idx];
+        const extrasAtuais = Array.isArray(atualProd.barcodesExtra) ? atualProd.barcodesExtra : [];
+        // código da NF que não é o principal nem um adicional entra como adicional (não substitui o principal)
+        const novosExtras = bcNF && !todosCodigosProd(atualProd).includes(bcNF) && atualProd.barcode ? [...extrasAtuais, bcNF] : extrasAtuais;
         np[idx] = {
-          ...np[idx],
+          ...atualProd,
           costPrice: p.precoUnitario,
           // preço NF é o custo
-          stock: np[idx].stock + p.estoque,
-          barcode: p.barcode || np[idx].barcode
+          stock: atualProd.stock + p.estoque,
+          barcode: atualProd.barcode || bcNF,
+          barcodesExtra: novosExtras
         };
         atualizados++;
       } else {
@@ -8597,7 +8614,8 @@ function ImportarPage(_ref21) {
         ...x,
         costPrice: anterior.costPrice,
         stock: anterior.stock,
-        barcode: anterior.barcode
+        barcode: anterior.barcode,
+        barcodesExtra: anterior.barcodesExtra
       } : x;
     });
     persistP(np);
@@ -9830,7 +9848,7 @@ function AgentePage(props) {
       const nome = String(input.nome || "").trim();
       const barcode = String(input.codigo_barras || "").trim();
       if (!nome) return { ok: false, msg: "Nome vazio", lista };
-      if (barcode && lista.some(p => String(p.barcode || "") === barcode)) return { ok: false, msg: "Código de barras já cadastrado", lista };
+      if (barcode && lista.some(p => todosCodigosProd(p).includes(barcode))) return { ok: false, msg: "Código de barras já cadastrado", lista };
       const novo = { id: uid(), name: nome, barcode, price: +input.preco || 0, stock: +input.estoque || 0, category: input.categoria || "Outros", minStock: 5 };
       return { ok: true, msg: "Cadastrado", lista: [novo, ...lista], antes: null, depois: novo, descricao: "Cadastrou " + nome };
     }
@@ -14181,6 +14199,13 @@ function PDVApp() {
       photo: form.photo || "",
       description: form.description || ""
     };
+    const codigosNovo = todosCodigosProd(item);
+    const outroProd = codigosNovo.length ? products.find(p => p.id !== (editProd && editProd.id) && todosCodigosProd(p).some(c => codigosNovo.includes(c))) : null;
+    if (outroProd) {
+      const cod = codigosNovo.find(c => todosCodigosProd(outroProd).includes(c));
+      notify('Código ' + cod + ' já usado em "' + outroProd.name + '"', "warn");
+      return;
+    }
     if (editProd) {
       persistP(products.map(x => x.id === editProd.id ? {
         ...x,
@@ -17827,6 +17852,8 @@ function PDVApp() {
   }), " Salvar"))), prodSheet && /*#__PURE__*/React.createElement(ProductSheet, {
     S: S,
     initial: editProd,
+    products: products,
+    notify: notify,
     prefillName: prodSheetPrefill,
     cats: cats,
     onSave: saveProduct,
