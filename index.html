@@ -7388,10 +7388,12 @@ function ListaComprasPage(_ref20) {
     setCompradoModal(null);
     notify('"' + nome + '" marcado como comprado ✓');
   };
-  const confirmarReceber = () => {
+  const confirmarReceber = async () => {
     if (!receberModal) return;
     const qtdNum = parseFloat(String(receberQty).replace(",", ".")) || 0;
     if (qtdNum <= 0) { notify("Informe a quantidade recebida", "error"); return; }
+    let fotoImportada = "";
+    try { fotoImportada = (await _photoDB.get("lc_" + receberModal.id)) || ""; } catch (_) {}
     // Busca produto pelo barcode (principal ou adicional)
     const prod = receberBarcode ? findProdByBC(receberBarcode) : null;
     if (prod && updateProduct) {
@@ -7399,8 +7401,10 @@ function ListaComprasPage(_ref20) {
       updateProduct(prod.id, {
         stock: (prod.stock || 0) + qtdNum,
         costPrice: receberModal.costPrice || prod.costPrice,
-        price: receberModal.price || prod.price
+        price: receberModal.price || prod.price,
+        ...(fotoImportada && !prod.photo ? { photo: fotoImportada } : {})
       });
+      if (fotoImportada && !prod.photo) _photoDB.set(prod.id, fotoImportada);
       notify("Estoque de " + prod.name + " atualizado +" + qtdNum + " ✓");
     } else if (!prod && persistP) {
       // Produto novo — cadastra automaticamente
@@ -7417,11 +7421,12 @@ function ListaComprasPage(_ref20) {
         minStock: 5,
         unit: "unid",
         barcode: receberBarcode || "",
-        photo: "",
+        photo: fotoImportada,
         description: "",
         createdAt: Date.now()
       };
       persistP([novo, ...(products || [])]);
+      if (fotoImportada) _photoDB.set(novo.id, fotoImportada);
       notify("Produto \"" + novo.name + "\" cadastrado e estoque iniciado ✓");
     } else {
       notify("Entrada registrada (produto não vinculado ao estoque)", "warn");
@@ -8027,6 +8032,9 @@ function ImportarPage(_ref21) {
     setFornecedorSelId = _useStateFornSelB[1]; // id do fornecedor escolhido pro lote atual
   const getCategoria = nome => {
     const d = nome.toLowerCase();
+    if (/eletr|quadro distr|caixa de luz|pino |conector|aterramento/.test(d)) return "Elétrico";
+    if (/joelho|luva|adaptador|bucha|nipel|uniao|curva|juncao|multisifao|engate|boia|esguicho|fita vedarosca|adesivo|cx\.?sif|assento sanit/.test(d)) return "Hidráulica";
+    if (/lona/.test(d)) return "Construção";
     if (/torneira|valvula|reparo|sifao|tubo|hidro|ducha|chuveiro|registro/.test(d)) return "Hidráulica";
     if (/interruptor|tomada|fio|cabo|disjuntor|lampada|led/.test(d)) return "Elétrico";
     if (/broca|martelo|serra|chave|alicate|parafuso|prego|porca|marreta/.test(d)) return "Ferramentas";
@@ -8384,6 +8392,162 @@ function ImportarPage(_ref21) {
     if (produtos.length === 0) throw new Error("Nenhum produto reconhecido. Formato:\nDESCRIÇÃO UNIDADE QTD PREÇO\nEx: CADEADO 50MM UN 5,00 193,70");
     return produtos;
   };
+
+  // ── PEDIDOS DE FORNECEDOR (Couto / Krona) + FOTOS DO PDF ─────────────────────
+  const _pNum = v => parseFloat(String(v || "0").replace(/\./g, "").replace(",", "."));
+  const _healNome = s => {
+    ["CANTONEIRA", "MARGIRUS", "MARGIRIUS", "AQUATOOLS", "TUBOZAN", "PRECON"].forEach(w => {
+      s = s.replace(new RegExp(w.split("").join("\\s?"), "g"), w);
+    });
+    return s;
+  };
+  const achaFornecedor = info => {
+    if (!info) return null;
+    const c = (info.cnpj || "").replace(/\D/g, "");
+    const ch = (info.chave || "").toLowerCase();
+    return (fornecedores || []).find(f => c && (f.cnpj || "").replace(/\D/g, "") === c || ch && (f.nome || "").toLowerCase().includes(ch)) || null;
+  };
+  // Pedido da Distribuidora Roberto J Couto: ITEM/EAN13/NCM | DESCRIÇÃO | PREÇO | PESO | QTD | TOTAL
+  const parseCoutoPDF = linhas => {
+    const reRow = /^(\d{6,9})\s+(.+?)\s+(\d[\d.]*,\d+)\s+(\d+(?:[.,]\d+)?)\s+(\d+)\s+(\d[\d.]*(?:,\d+)?)$/;
+    const produtos = [];
+    for (let i = 0; i < linhas.length; i++) {
+      const m = linhas[i].text.match(reRow);
+      if (!m) continue;
+      const partes = [m[2]];
+      let ean = "";
+      for (let k = 1; k <= 2 && i + k < linhas.length; k++) {
+        const t = linhas[i + k].text;
+        if (reRow.test(t) || /^(PESO TOTAL|TOTAL DO)/.test(t)) break;
+        const mm = t.match(/^(\d{4,14})(?:\s+(.*))?$/);
+        if (!mm) break;
+        if (k === 1) ean = mm[1];
+        if (mm[2]) partes.push(mm[2]);
+      }
+      let full = partes.join(" ").replace(/\s+/g, " ").trim();
+      let marca = "", cdCod = "";
+      const mcd = full.match(/\[CD:\s*([\d\s]+?)\s*-\s*(.*?)\s*\]?\s*$/);
+      if (mcd) {
+        cdCod = mcd[1].replace(/\s/g, "");
+        marca = _healNome(mcd[2].replace(/\]/g, "").trim().split(" - ").pop());
+        full = full.slice(0, mcd.index).trim();
+      }
+      const nome = _healNome(full).replace(/\s*\+\s*$/, "").trim().slice(0, 60);
+      const preco = _pNum(m[3]);
+      const qtd = parseInt(m[5]) || 1;
+      if (!nome || preco <= 0) continue;
+      const barcode = /^\d{8}$|^\d{12,14}$/.test(ean) ? ean : "";
+      produtos.push({
+        id: uid(), nomeOriginal: nome, nome, marca, categoria: getCategoria(nome),
+        quantidade: qtd, unidade: "UN", unitsPerBox: 1, precoUnitario: +preco.toFixed(4),
+        estoque: qtd, barcode, codigoProduto: cdCod || m[1], observacao: "",
+        selected: true, _pg: linhas[i].pg, _y: linhas[i].y
+      });
+    }
+    if (produtos.length === 0) throw new Error("Nenhum item encontrado neste pedido.");
+    produtos.emitInfo = { nome: "DISTRIBUIDORA ROBERTO J COUTO LTDA", cnpj: "", chave: "couto" };
+    return produtos;
+  };
+  // Pedido Krona ("Imagem do Pedido"): usa o Unit.Imp. (com IPI + ICMS-ST) como custo real
+  const parseKronaPDF = linhas => {
+    const n3 = "(\\d[\\d.]*,\\d{3})", n2 = "(\\d[\\d.]*,\\d{2})";
+    const re = new RegExp("^(\\d{4})\\s+(.+?)\\s+(\\d+)\\s+(\\d+)\\s+" + n3 + "\\s+" + n2 + "\\s+" + n2 + "\\s+" + n2 + "\\s+" + n3 + "\\s+" + n2 + "$");
+    const produtos = [];
+    linhas.forEach(l => {
+      const m = l.text.match(re);
+      if (!m) return;
+      let desc = m[2].replace(/\s+/g, " ").trim();
+      const emb = parseInt(m[3]) || 1, qtd = parseInt(m[4]) || 1;
+      const unitImp = _pNum(m[9]);
+      if (unitImp <= 0) return;
+      const nome = (/KRONA/i.test(desc) ? desc : desc + " KRONA").slice(0, 60);
+      produtos.push({
+        id: uid(), nomeOriginal: desc, nome, marca: "Krona", categoria: getCategoria(desc),
+        quantidade: qtd, unidade: "UN", unitsPerBox: 1, precoUnitario: +unitImp.toFixed(3),
+        estoque: qtd, barcode: "", codigoProduto: m[1],
+        observacao: "Emb. " + emb + " · custo c/ IPI+ICMS-ST (s/ imp.: " + m[5] + ")",
+        selected: true, _pg: l.pg, _y: l.y
+      });
+    });
+    if (produtos.length === 0) throw new Error("Nenhum item encontrado neste pedido Krona.");
+    produtos.emitInfo = { nome: "Krona Tubos e Conexões LTDA.", cnpj: "00145602000137", chave: "krona" };
+    return produtos;
+  };
+  // Extrai as imagens embutidas no PDF e associa à linha do produto (pela posição vertical)
+  const extrairFotosPDF = async (pdf, produtos) => {
+    const OPS = window.pdfjsLib.OPS;
+    const mul = (a, b) => [a[0] * b[0] + a[2] * b[1], a[1] * b[0] + a[3] * b[1], a[0] * b[2] + a[2] * b[3], a[1] * b[2] + a[3] * b[3], a[0] * b[4] + a[2] * b[5] + a[4], a[1] * b[4] + a[3] * b[5] + a[5]];
+    const paraDataUrl = img => {
+      if (!img || !img.width || !img.height) return null;
+      const w = img.width, h = img.height;
+      if (w < 24 || h < 24) return null;
+      const cv = document.createElement("canvas");
+      cv.width = w; cv.height = h;
+      const cx = cv.getContext("2d");
+      cx.fillStyle = "#fff"; cx.fillRect(0, 0, w, h);
+      if (img.bitmap) {
+        cx.drawImage(img.bitmap, 0, 0);
+      } else if (img.data) {
+        const d = img.data, rgba = new Uint8ClampedArray(w * h * 4);
+        if (d.length === w * h * 4) rgba.set(d);
+        else if (d.length === w * h * 3) { for (let i = 0, j = 0; i < w * h; i++) { rgba[j++] = d[i * 3]; rgba[j++] = d[i * 3 + 1]; rgba[j++] = d[i * 3 + 2]; rgba[j++] = 255; } }
+        else { const rb = (w + 7) >> 3; for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const v = (d[y * rb + (x >> 3)] >> (7 - (x & 7))) & 1 ? 255 : 0; const j = (y * w + x) * 4; rgba[j] = rgba[j + 1] = rgba[j + 2] = v; rgba[j + 3] = 255; } }
+        const tmp = document.createElement("canvas");
+        tmp.width = w; tmp.height = h;
+        tmp.getContext("2d").putImageData(new ImageData(rgba, w, h), 0, 0);
+        cx.drawImage(tmp, 0, 0);
+      } else return null;
+      const MAX = 260, esc = Math.min(1, MAX / Math.max(w, h));
+      const out = document.createElement("canvas");
+      out.width = Math.max(1, Math.round(w * esc)); out.height = Math.max(1, Math.round(h * esc));
+      const ox = out.getContext("2d");
+      ox.fillStyle = "#fff"; ox.fillRect(0, 0, out.width, out.height);
+      ox.drawImage(cv, 0, 0, out.width, out.height);
+      return out.toDataURL("image/jpeg", 0.72);
+    };
+    const porPag = {};
+    produtos.forEach(p => { if (p._pg) (porPag[p._pg] = porPag[p._pg] || []).push(p); });
+    let achadas = 0;
+    for (const pgStr of Object.keys(porPag)) {
+      try {
+        const page = await pdf.getPage(+pgStr);
+        setStatusMsg("Extraindo fotos (pág. " + pgStr + ")...");
+        const ops = await page.getOperatorList();
+        const cache = {};
+        let ctm = [1, 0, 0, 1, 0, 0];
+        const pilha = [];
+        for (let i = 0; i < ops.fnArray.length; i++) {
+          const fn = ops.fnArray[i], args = ops.argsArray[i];
+          if (fn === OPS.save) pilha.push(ctm.slice());
+          else if (fn === OPS.restore) ctm = pilha.pop() || [1, 0, 0, 1, 0, 0];
+          else if (fn === OPS.transform) ctm = mul(ctm, args);
+          else if (fn === OPS.paintImageXObject || fn === OPS.paintJpegXObject) {
+            const nome = args[0];
+            const yMin = Math.min(ctm[5], ctm[5] + ctm[3]), yMax = Math.max(ctm[5], ctm[5] + ctm[3]);
+            let alvo = null, melhor = 1e9;
+            porPag[pgStr].forEach(p => {
+              if (p.foto) return;
+              if (p._y >= yMin - 6 && p._y <= yMax + 6) {
+                const dist = Math.abs(yMax - p._y);
+                if (dist < melhor) { melhor = dist; alvo = p; }
+              }
+            });
+            if (!alvo) continue;
+            if (!(nome in cache)) {
+              const store = String(nome).startsWith("g_") ? page.commonObjs : page.objs;
+              const img = await Promise.race([
+                new Promise(res => { try { store.get(nome, res); } catch (e) { res(null); } }),
+                new Promise(res => setTimeout(() => res(null), 3000))
+              ]);
+              cache[nome] = paraDataUrl(img);
+            }
+            if (cache[nome]) { alvo.foto = cache[nome]; achadas++; }
+          }
+        }
+      } catch (e) { console.warn("[PDV] fotos do PDF falharam na pág. " + pgStr, e); }
+    }
+    return achadas;
+  };
   const parsePDF = async file => {
     setStatusMsg("Carregando PDF.js...");
     if (!window.pdfjsLib) {
@@ -8403,6 +8567,7 @@ function ImportarPage(_ref21) {
     }).promise;
     const np = Math.min(pdf.numPages, 10);
     const pageTexts = [];
+    const lineObjs = [];
     for (let p = 1; p <= np; p++) {
       setStatusMsg("Lendo pág. " + p + "/" + np + "...");
       const page = await pdf.getPage(p);
@@ -8418,9 +8583,25 @@ function ImportarPage(_ref21) {
         });
       });
       const sortedY = Object.keys(byY).map(Number).sort((a, b) => b - a);
-      pageTexts.push(...sortedY.map(y => byY[y].sort((a, b) => a.x - b.x).map(o => o.str).join(" ").trim()).filter(Boolean));
+      sortedY.forEach(y => {
+        const t = byY[y].sort((a, b) => a.x - b.x).map(o => o.str).join(" ").trim();
+        if (!t) return;
+        pageTexts.push(t);
+        lineObjs.push({ text: t.replace(/\s+/g, " "), y, pg: p });
+      });
     }
     const fullText = pageTexts.join("\n");
+    // Pedido Krona (Imagem do Pedido)
+    if (fullText.includes("Imagem do Pedido") || fullText.includes("Unit.Imp.")) {
+      return parseKronaPDF(lineObjs);
+    }
+    // Pedido Couto (traz as fotos dos produtos dentro do PDF)
+    if (fullText.includes("EAN13") && fullText.includes("[CD:")) {
+      const prods = parseCoutoPDF(lineObjs);
+      const n = await extrairFotosPDF(pdf, prods);
+      setStatusMsg(n + " foto(s) extraída(s)");
+      return prods;
+    }
     // Detecta orçamento pelo conteúdo (tem COD NCM: ou COD.BARRAS:)
     if (fullText.includes("COD NCM:") || fullText.includes("COD.BARRAS:") || fullText.includes("ORCAMENTO Nº") || fullText.includes("ORÇAMENTO")) {
       return parseOrcamentoPDF(fullText);
@@ -8436,42 +8617,47 @@ function ImportarPage(_ref21) {
     return parseTXT(fullText);
   };
   const handleFile = async e => {
-    var _e$target$files2;
-    const file = (_e$target$files2 = e.target.files) === null || _e$target$files2 === void 0 ? void 0 : _e$target$files2[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
     e.target.value = "";
-    const name = file.name.toLowerCase();
     setLoading(true);
     setStatusMsg("Lendo arquivo...");
     try {
       let produtos = [];
-      const isXml = name.endsWith(".xml");
-      setOrigemFormato("orcamento"); // XML agora segue o mesmo fluxo do orçamento (vai para Lista de Compras)
+      let primeiraInfo = null;
+      setOrigemFormato("orcamento"); // tudo vai para a Lista de Compras
       setFornecedorDetectado(null);
       setFornecedorSelId("");
-      if (name.endsWith(".xml")) {
-        const text = await file.text();
-        const xmlResult = parseXML(text);
-        produtos = xmlResult.produtos;
-        if (xmlResult.emitInfo && (xmlResult.emitInfo.cnpj || xmlResult.emitInfo.nome)) {
-          setFornecedorDetectado(xmlResult.emitInfo);
-          const cnpjLimpo = (xmlResult.emitInfo.cnpj || "").replace(/\D/g, "");
-          const match = cnpjLimpo && (fornecedores || []).find(f => (f.cnpj || "").replace(/\D/g, "") === cnpjLimpo);
-          if (match) setFornecedorSelId(match.id);
+      for (const file of files) {
+        const name = file.name.toLowerCase();
+        let lote = [],
+          info = null;
+        if (name.endsWith(".xml")) {
+          const text = await file.text();
+          const xmlResult = parseXML(text);
+          lote = xmlResult.produtos;
+          info = xmlResult.emitInfo;
+        } else if (name.endsWith(".csv")) {
+          lote = parseCSV(await file.text());
+        } else if (name.endsWith(".pdf")) {
+          lote = await parsePDF(file);
+          info = lote.emitInfo || null;
+        } else if (name.endsWith(".txt")) {
+          lote = parseTXT(await file.text());
+        } else throw new Error(file.name + ": use XML, CSV, PDF ou TXT.");
+        if (info && (info.cnpj || info.nome)) {
+          lote = lote.map(p => ({ ...p, fornInfo: info }));
+          if (!primeiraInfo) primeiraInfo = info;
         }
-        notify(produtos.length + " item(ns) do XML ✓");
-      } else if (name.endsWith(".csv")) {
-        const text = await file.text();
-        produtos = parseCSV(text);
-        notify(produtos.length + " item(ns) do CSV ✓");
-      } else if (name.endsWith(".pdf")) {
-        produtos = await parsePDF(file);
-        notify(produtos.length + " item(ns) do PDF ✓");
-      } else if (name.endsWith(".txt")) {
-        const text = await file.text();
-        produtos = parseTXT(text);
-        notify(produtos.length + " item(ns) do TXT ✓");
-      } else throw new Error("Use XML, CSV, PDF ou TXT.");
+        produtos = produtos.concat(lote);
+      }
+      if (primeiraInfo) {
+        setFornecedorDetectado(primeiraInfo);
+        const match = achaFornecedor(primeiraInfo);
+        if (match) setFornecedorSelId(match.id);
+      }
+      const comFoto = produtos.filter(p => p.foto).length;
+      notify(produtos.length + " item(ns) de " + files.length + " arquivo(s)" + (comFoto ? " · " + comFoto + " com foto" : "") + " ✓");
       setParsed(enrichComMatches(produtos, products));
       setStep("review");
     } catch (err) {
@@ -8587,18 +8773,24 @@ function ImportarPage(_ref21) {
     }
     const fornecedorEscolhido = (fornecedores || []).find(f => f.id === fornecedorSelId);
     const listaAtual = load("pdv_lista_compras", []);
-    const novosItens = sel.map(p => ({
-      id: uid(),
+    const novosItens = sel.map(p => {
+      const fx = p.fornInfo ? achaFornecedor(p.fornInfo) : null;
+      const fornFinal = fx || fornecedorEscolhido;
+      const itemId = uid();
+      if (p.foto) _photoDB.set("lc_" + itemId, p.foto);
+      return {
+      id: itemId,
       name: p.nome,
       qty: String(p.estoque || p.quantidade || 1),
       fase: "pendente",
       price: 0,
       costPrice: p.precoUnitario || 0,
       barcode: p.barcode || "",
-      fornecedorId: fornecedorEscolhido ? fornecedorEscolhido.id : "",
-      fornecedor: fornecedorEscolhido ? fornecedorEscolhido.nome : "",
+      fornecedorId: fornFinal ? fornFinal.id : "",
+      fornecedor: fornFinal ? fornFinal.nome : "",
       createdAt: Date.now()
-    }));
+    };
+    });
     const listaNova = [...novosItens, ...listaAtual];
     save("pdv_lista_compras", listaNova);
     if (novosItens.length > 20) syncSave("lista_compras", novosItens);else novosItens.forEach(i => syncSaveOne("lista_compras", i));
@@ -8770,7 +8962,7 @@ function ImportarPage(_ref21) {
       fontSize: 11,
       color: "var(--text-secondary)"
     }
-  }, "Detectado no XML: " + (fornecedorDetectado.nome || "\u2014") + (fornecedorDetectado.cnpj ? " \u00B7 " + fornecedorDetectado.cnpj : "") + (fornecedorSelId ? " (vinculado automaticamente)" : " \u2014 n\u00E3o cadastrado ainda")), /*#__PURE__*/React.createElement("select", {
+  }, "Detectado no arquivo: " + (fornecedorDetectado.nome || "\u2014") + (fornecedorDetectado.cnpj ? " \u00B7 " + fornecedorDetectado.cnpj : "") + (fornecedorSelId ? " (vinculado automaticamente)" : " \u2014 n\u00E3o cadastrado ainda")), /*#__PURE__*/React.createElement("select", {
     value: fornecedorSelId,
     onChange: e => setFornecedorSelId(e.target.value),
     style: {
@@ -9052,7 +9244,10 @@ function ImportarPage(_ref21) {
       fontWeight: 700,
       marginBottom: 3
     }
-  }, prod.nome), /*#__PURE__*/React.createElement("div", {
+  }, prod.foto && /*#__PURE__*/React.createElement("img", {
+    src: prod.foto,
+    style: { width: 38, height: 38, objectFit: "contain", background: "#fff", borderRadius: 6, marginRight: 8, verticalAlign: "middle" }
+  }), prod.nome), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       color: "var(--text-secondary)",
@@ -9204,7 +9399,7 @@ function ImportarPage(_ref21) {
       fontSize: 11,
       color: "var(--text-secondary)"
     }
-  }, "Detectado no XML: " + (fornecedorDetectado.nome || "\u2014") + (fornecedorDetectado.cnpj ? " \u00B7 " + fornecedorDetectado.cnpj : "") + (fornecedorSelId ? " (vinculado automaticamente)" : " \u2014 n\u00E3o cadastrado ainda")), /*#__PURE__*/React.createElement("select", {
+  }, "Detectado no arquivo: " + (fornecedorDetectado.nome || "\u2014") + (fornecedorDetectado.cnpj ? " \u00B7 " + fornecedorDetectado.cnpj : "") + (fornecedorSelId ? " (vinculado automaticamente)" : " \u2014 n\u00E3o cadastrado ainda")), /*#__PURE__*/React.createElement("select", {
     value: fornecedorSelId,
     onChange: e => setFornecedorSelId(e.target.value),
     style: {
@@ -9332,6 +9527,7 @@ function ImportarPage(_ref21) {
   })), /*#__PURE__*/React.createElement("input", {
     ref: fileRef,
     type: "file",
+    multiple: true,
     accept: ".xml,.csv,.pdf,.txt,text/xml,text/csv,application/pdf,text/plain",
     style: {
       display: "none"
