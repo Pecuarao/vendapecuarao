@@ -664,13 +664,13 @@ const _SB_H = () => ({
 });
 
 // ── BUSCA DE PRODUTO POR CÓDIGO DE BARRAS (Cosmos, via Edge Function) ────────
-// Consulta a Edge Function 'cosmos-lookup' criada no Supabase, que por sua vez
-// chama a API do Cosmos (Bluesoft) com o token guardado nos Secrets do projeto.
+// Consulta a Edge Function 'cosmo' criada no Supabase, que por sua vez
+// chama a API da SI5 Global (com cache) usando o token guardado nos Secrets do projeto.
 const buscarProdutoCosmos = async (gtin) => {
   const codigo = (gtin || '').trim();
   if (!codigo) return { ok: false, error: 'Código de barras vazio' };
   try {
-    const r = await fetch(SUPABASE_URL + '/functions/v1/cosmos-lookup?gtin=' + encodeURIComponent(codigo), {
+    const r = await fetch(SUPABASE_URL + '/functions/v1/cosmo?gtin=' + encodeURIComponent(codigo), {
       method: 'GET',
       headers: {
         'apikey': _SB_KEY(),
@@ -2126,7 +2126,7 @@ function ProductSheet(_ref9) {
     }
     const d = res.data;
     if (!d.description) {
-      setCosmosMsg("Produto não encontrado na base do Cosmos");
+      setCosmosMsg("Produto não encontrado na base de produtos");
       return;
     }
     setCosmosResultado(d);
@@ -2138,7 +2138,7 @@ function ProductSheet(_ref9) {
   };
   const usarCosmosDescricao = () => {
     if (!cosmosResultado) return;
-    const partes = [cosmosResultado.brand, cosmosResultado.gpc_description].filter(Boolean);
+    const partes = [cosmosResultado.brand, cosmosResultado.category || cosmosResultado.gpc_description].filter(Boolean);
     set("description", partes.length ? partes.join(" · ") : cosmosResultado.description);
   };
   const usarCosmosFoto = () => {
