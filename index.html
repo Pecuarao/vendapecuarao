@@ -54,6 +54,7 @@ body{background:#FFFFFF;color:var(--text-primary);font-family:'Sora',sans-serif;
 <div id="erro"></div>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
 <script>
 window.onerror = function(msg, src, line, col, err) {
   var d = document.getElementById('erro');
@@ -547,23 +548,522 @@ const diffDias = (a, b) => {
   const db = new Date(b + "T12:00");
   return Math.round((da - db) / 86400000);
 };
-// ── Impressão de etiquetas Elgin L42 Pro Full (1 coluna 30x60mm ou 3 colunas 20x30mm) ──
-// items: array de { name, price, barcode }
-function printElginLabels(items, layout) {
-  if (!items || items.length === 0) return;
-  const pageCss = layout === "1col" ? "@page{size:30mm 60mm;margin:0}body{margin:0}" : "@page{size:20mm 30mm;margin:0}body{margin:0}";
-  const labelCss = layout === "1col" ? "width:30mm;height:60mm;padding:2mm 1.5mm;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;align-items:center;page-break-after:always;text-align:center;" : "width:20mm;height:30mm;padding:1mm;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;align-items:center;page-break-after:always;text-align:center;";
-  const nomeSize = layout === "1col" ? "11px" : "7px";
-  const precoSize = layout === "1col" ? "18px" : "11px";
-  const labelsHtml = items.map(item => {
-    const nome = (item.name || "").toUpperCase();
-    const preco = item.price ? fmt(item.price) : "—";
-    const code = item.barcode || "";
-    return "<div class='label'>" + "<div style='font-size:" + nomeSize + ";font-weight:700;line-height:1.15;max-height:2.4em;overflow:hidden'>" + nome + "</div>" + "<div style='font-size:" + precoSize + ";font-weight:900;color:#000;margin:1mm 0'>" + preco + "</div>" + (code ? "<svg class='bc' data-code='" + code + "'></svg><div style='font-size:6px;letter-spacing:1px'>" + code + "</div>" : "") + "</div>";
-  }).join("");
-  const html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Etiquetas</title>" + "<style>" + pageCss + "*{font-family:Arial,sans-serif}.label{" + labelCss + "border:0}" + (layout === "3col" ? ".wrap{display:flex;flex-wrap:wrap}" : "") + "</style></head><body>" + "<div class='wrap'>" + labelsHtml + "</div>" + "<script src='https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js'><" + "/script>" + "<script>" + "window.onload=function(){" + "document.querySelectorAll('.bc').forEach(function(el){" + "try{JsBarcode(el, el.getAttribute('data-code'), {format:'CODE128',width:1.3,height:28,displayValue:false,margin:0});}catch(e){}" + "});" + "};" + "<" + "/script>" + "</body></html>";
-  printHTMLDoc(html, "Etiquetas", "etiqueta", layout === "1col" ? 30 : 20, layout === "1col" ? 60 : 30);
+// ══════════════════════════════════════════════════════════════════════════════
+// ETIQUETAS CONFIGURÁVEIS (modelos + designer) — estilo Clipp / FastReport
+// • Modelos ficam salvos no aparelho (localStorage). Cada modelo define papel
+//   (rolo ou folha A4), tamanho, colunas e os campos posicionados em milímetros.
+// • A etiqueta é gerada em HTML/CSS/SVG puro (sem scripts) → imprime offline,
+//   no Windows (Electron), no Android (PrintPlugin) e no navegador.
+// ══════════════════════════════════════════════════════════════════════════════
+const ETQ_KEY = "pec_etq_modelos_v1";
+const ETQ_OPT_KEY = "pec_etq_opcoes_v1";
+const ETQ_SAMPLE = { name: "Ração Cão Adulto Raças 25 kg", price: 210, barcode: "7891234567895", stock: 12, unit: "sc", ref: "1034" };
+const etqH = React.createElement;
+const etqR1 = v => Math.round(v * 10) / 10;
+const etqId = () => "e" + Math.random().toString(36).slice(2, 9);
+const etqEsc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const etqClamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const etqClone = o => JSON.parse(JSON.stringify(o));
+
+const etqEl = (tipo, o) => Object.assign({
+  id: etqId(), tipo: tipo, x: 1, y: 1, w: 20, h: 5, pt: 8, negrito: false, alinha: "center",
+  texto: "", caixaAlta: false, ajustar: true, formato: "code128", cond: "", borda: false
+}, o || {});
+
+// ── Layout automático (usado nos modelos padrão e no botão "Reorganizar") ───
+function etqAuto(W, H, parc) {
+  const m = etqClamp(Math.min(W, H) * 0.05, 0.6, 1.5);
+  const iw = W - 2 * m, ih = H - 2 * m;
+  const L = [];
+  const T = (texto, x, y, w, h, pt, extra) => etqEl("texto", Object.assign({ texto: texto, x: etqR1(x), y: etqR1(y), w: etqR1(w), h: etqR1(h), pt: etqR1(pt) }, extra || {}));
+  if (W / H >= 2) {
+    const lw = iw * 0.56, rw = iw - lw - m;
+    L.push(T("{DESCRICAO}", m, m, lw, ih * 0.46, etqClamp(H / 3.2, 6, 14), { negrito: true, alinha: "left", caixaAlta: true }));
+    L.push(T("{PRECO}", m, m + ih * 0.48, parc ? lw * 0.5 : lw, ih * 0.5, etqClamp(H / 2.2, 8, 24), { negrito: true, alinha: "left" }));
+    if (parc) L.push(T("A Prazo R$ {PRAZO}\n{N}x de R$ {PARCELA}", m + lw * 0.5, m + ih * 0.5, lw * 0.5, ih * 0.46, etqClamp(H / 5, 5, 9), { alinha: "left", cond: "parcelado" }));
+    L.push(etqEl("barras", { x: etqR1(m + lw + m), y: etqR1(m), w: etqR1(rw), h: etqR1(ih * 0.74) }));
+    L.push(T("{CODIGO}", m + lw + m, m + ih * 0.76, rw, ih * 0.22, etqClamp(H / 9, 4, 8), {}));
+  } else {
+    const fr = parc ? [0.2, 0.19, 0.2, 0.29, 0.09] : [0.28, 0.26, 0, 0.34, 0.1];
+    let y = m;
+    const put = h => { const yy = y; y += h; return yy; };
+    L.push(T("{DESCRICAO}", m, put(ih * fr[0]), iw, ih * fr[0], etqClamp(H / 6.5, 4.5, 10), { negrito: true, caixaAlta: true }));
+    L.push(T("{PRECO}", m, put(ih * fr[1]), iw, ih * fr[1], etqClamp(H / 3.6, 6, 18), { negrito: true }));
+    if (parc) L.push(T("A Prazo R$ {PRAZO}\n{N}x de R$ {PARCELA}", m, put(ih * fr[2]), iw, ih * fr[2], etqClamp(H / 7, 4, 8), { cond: "parcelado" }));
+    L.push(etqEl("barras", { x: etqR1(m + iw * 0.04), y: etqR1(put(ih * fr[3])), w: etqR1(iw * 0.92), h: etqR1(ih * fr[3] * 0.92) }));
+    L.push(T("{CODIGO}", m, put(ih * fr[4]), iw, ih * fr[4], etqClamp(H / 12, 3.5, 6), {}));
+  }
+  return L;
 }
+
+function etqPadroes() {
+  const mk = (id, nome, tipo, W, H, cols, gapH, gapV, ml, mt, parc) => ({
+    id: id, nome: nome,
+    papel: { tipo: tipo, larg: W, alt: H, cols: cols, gapH: gapH, gapV: gapV, ml: ml, mt: mt, borda: false },
+    elementos: etqAuto(W, H, !!parc)
+  });
+  return [
+    mk("elgin-1col", "Elgin L42 - 1 Coluna - 30 x 60", "etiqueta", 30, 60, 1, 0, 0, 0, 0),
+    mk("elgin-3col", "Elgin L42 - 3 Colunas - 20 x 30", "etiqueta", 20, 30, 1, 0, 0, 0, 0),
+    mk("1c-60x30", "1 Coluna - 60 x 30", "etiqueta", 60, 30, 1, 0, 0, 0, 0),
+    mk("1c-110x30", "1 Coluna - 110 x 30", "etiqueta", 110, 30, 1, 0, 0, 0, 0),
+    mk("2c-50x30", "2 Colunas - 50 x 30", "linha", 50, 30, 2, 2, 0, 0, 0),
+    mk("3c-33x30", "3 Colunas - 33 x 30", "linha", 33, 30, 3, 2, 0, 0, 0),
+    mk("3c-33x30-parc", "3 Colunas - 33 x 30 - Parcelamento", "linha", 33, 30, 3, 2, 0, 0, 0, true),
+    mk("5c-25x15", "5 Colunas - 25 x 15", "linha", 25, 15, 5, 2, 0, 0, 0),
+    mk("a4-96", "A4 - 31 x 17 (96 etiquetas)", "folha", 31, 17, 6, 0.8, 0.8, 10, 6.5)
+  ];
+}
+
+function etqNorm(m) {
+  const base = { tipo: "etiqueta", larg: 30, alt: 30, cols: 1, gapH: 0, gapV: 0, ml: 0, mt: 0, borda: false };
+  m.papel = Object.assign(base, m.papel || {});
+  m.elementos = (m.elementos || []).map(e => etqEl(e.tipo || "texto", e));
+  return m;
+}
+function etqLoad() {
+  let m = load(ETQ_KEY, null);
+  if (!Array.isArray(m) || !m.length) { m = etqPadroes(); save(ETQ_KEY, m); }
+  return m.map(etqNorm);
+}
+function etqSaveAll(list) { save(ETQ_KEY, list); }
+function etqOpts() {
+  return Object.assign({ modeloId: "elgin-1col", qtdModo: "um", qtdN: 1, parcelado: false, parcelas: 1, juro: 0, inicio: 1 }, load(ETQ_OPT_KEY, {}));
+}
+function etqResumo(m) {
+  const p = m.papel;
+  if (p.tipo === "folha") return "Folha A4 · " + p.cols + " col. · " + p.larg + " × " + p.alt + " mm";
+  if (p.tipo === "linha") return "Rolo · " + p.cols + " col. · " + p.larg + " × " + p.alt + " mm";
+  return "Rolo · " + p.larg + " × " + p.alt + " mm";
+}
+
+// ── Dados do produto → texto ────────────────────────────────────────────────
+const etqNum = v => (v || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function etqTokens(item, opts) {
+  const price = +(item.price || 0);
+  const n = Math.max(1, parseInt(opts.parcelas) || 1);
+  const juro = +opts.juro || 0;
+  const prazo = +(price * (1 + juro / 100)).toFixed(2);
+  const parcela = +(prazo / n).toFixed(2);
+  return {
+    DESCRICAO: (item.name || "").toUpperCase(),
+    PRECO: price ? fmt(price) : "—",
+    PRECO_NUM: price ? etqNum(price) : "—",
+    CODIGO: item.barcode || "",
+    REF: String(item.ref || item.code || ""),
+    UNID: String(item.unit || "").toUpperCase(),
+    PRAZO: etqNum(prazo),
+    N: String(n),
+    PARCELA: etqNum(parcela),
+    JURO: String(juro).replace(".", ","),
+    DATA: new Date().toLocaleDateString("pt-BR")
+  };
+}
+const etqTexto = (tpl, tok) => String(tpl || "").replace(/\{([A-Z_]+)\}/g, (m, k) => (k in tok ? tok[k] : m));
+
+// ── Medição / ajuste automático de fonte ────────────────────────────────────
+let _etqCtx;
+function etqMeasure(t, pt, bold) {
+  try {
+    if (_etqCtx === undefined) { const cv = document.createElement("canvas"); _etqCtx = (cv.getContext && cv.getContext("2d")) || null; }
+    if (_etqCtx) {
+      _etqCtx.font = (bold ? "bold " : "") + (pt * 96 / 72) + "px Arial, Helvetica, sans-serif";
+      const w = _etqCtx.measureText(t).width;
+      if (w > 0 || !t) return w * 25.4 / 96;
+    }
+  } catch (e) {}
+  return t.length * pt * 0.3528 * 0.55 * (bold ? 1.06 : 1);
+}
+function etqWrap(text, wMm, pt, bold) {
+  const out = [];
+  String(text).split("\n").forEach(par => {
+    const words = par.split(/[ \t]+/).filter(Boolean); // NBSP (R$ 1,00) não quebra linha
+    if (!words.length) { out.push(""); return; }
+    let cur = "";
+    words.forEach(wd => {
+      const t = cur ? cur + " " + wd : wd;
+      if (!cur || etqMeasure(t, pt, bold) <= wMm) cur = t; else { out.push(cur); cur = wd; }
+    });
+    out.push(cur);
+  });
+  return out;
+}
+function etqFit(text, wMm, hMm, ptMax, bold, ajustar) {
+  const w = wMm * 0.97;
+  if (!ajustar) return { pt: ptMax, lines: etqWrap(text, w, ptMax, bold) };
+  for (let pt = ptMax; pt >= 3; pt -= 0.25) {
+    const lines = etqWrap(text, w, pt, bold);
+    const lh = pt * 0.3528 * 1.12;
+    if (lines.length * lh <= hMm + 0.01 && lines.every(l => etqMeasure(l, pt, bold) <= w + 0.01)) return { pt: pt, lines: lines };
+  }
+  return { pt: 3, lines: etqWrap(text, w, 3, bold) };
+}
+
+// ── Código de barras em SVG (sem scripts) ───────────────────────────────────
+function etqBar(code, formato) {
+  code = String(code || "");
+  if (!code || typeof JsBarcode === "undefined") return { html: "", modulos: 0 };
+  const tentar = fm => {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    JsBarcode(svg, code, { format: fm, width: 1, height: 40, displayValue: false, margin: 0, flat: fm === "EAN13" });
+    const vb = (svg.getAttribute("viewBox") || "0 0 100 40").split(" ");
+    ["x", "y", "style"].forEach(a => svg.removeAttribute(a));
+    svg.setAttribute("width", "100%");
+    svg.setAttribute("height", "100%");
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.setAttribute("shape-rendering", "crispEdges");
+    return { html: svg.outerHTML, modulos: parseFloat(vb[2]) || 0 };
+  };
+  try {
+    if (formato === "ean13" && /^\d{12,13}$/.test(code)) { try { return tentar("EAN13"); } catch (e) {} }
+    return tentar("CODE128");
+  } catch (e) { return { html: "", modulos: 0 }; }
+}
+
+// ── Elemento → CSS / HTML ───────────────────────────────────────────────────
+function etqElCss(el) {
+  const c = { "position": "absolute", "left": el.x + "mm", "top": el.y + "mm", "width": el.w + "mm", "height": el.h + "mm", "overflow": "hidden", "box-sizing": "border-box" };
+  if (el.tipo === "linha") { c["background"] = "#000"; c["height"] = Math.max(0.1, el.h) + "mm"; }
+  else if (el.tipo === "barras") { c["display"] = "block"; }
+  else {
+    c["display"] = "flex"; c["flex-direction"] = "column"; c["justify-content"] = "center";
+    c["text-align"] = el.alinha; c["font-weight"] = el.negrito ? "700" : "400"; c["color"] = "#000";
+  }
+  if (el.borda && el.tipo !== "linha") c["border"] = "0.2mm solid #000";
+  return c;
+}
+const etqCssStr = c => Object.keys(c).map(k => k + ":" + c[k]).join(";");
+const etqCssObj = c => { const o = {}; Object.keys(c).forEach(k => { o[k.replace(/-([a-z])/g, (m, x) => x.toUpperCase())] = c[k]; }); return o; };
+
+function etqElInner(el, tok) {
+  if (el.tipo === "linha") return "";
+  if (el.tipo === "barras") return tok.CODIGO ? etqBar(tok.CODIGO, el.formato).html : "";
+  let t = etqTexto(el.texto, tok);
+  if (el.caixaAlta) t = t.toUpperCase();
+  if (!t.trim()) return "";
+  const f = etqFit(t, el.w, el.h, el.pt, el.negrito, el.ajustar);
+  return f.lines.map(l => "<div style='white-space:nowrap;font-size:" + f.pt + "pt;line-height:1.12;min-height:1em'>" + etqEsc(l) + "</div>").join("");
+}
+
+function etqLabelHTML(tpl, item, opts, vazia) {
+  const p = tpl.papel;
+  let inner = "";
+  if (!vazia) {
+    const tok = etqTokens(item, opts);
+    tpl.elementos.forEach(el => {
+      if (el.cond === "parcelado" && !opts.parcelado) return;
+      inner += "<div style='" + etqCssStr(etqElCss(el)) + "'>" + etqElInner(el, tok) + "</div>";
+    });
+  }
+  return "<div class='label' style='width:" + p.larg + "mm;height:" + p.alt + "mm'>" + inner + "</div>";
+}
+
+// ── Monta o documento de impressão conforme o tipo de papel ─────────────────
+function etqDocumento(tpl, labels) {
+  const p = tpl.papel, W = p.larg, H = p.alt, cols = Math.max(1, parseInt(p.cols) || 1);
+  let css = "*{margin:0;padding:0;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}html,body{background:#fff}" +
+    ".label{position:relative;overflow:hidden;flex:none;" + (p.borda ? "outline:0.2mm dashed #888;outline-offset:-0.2mm;" : "") + "}.pg:last-child{page-break-after:auto!important}";
+  let body = "", pageW = W, pageH = H, modo = "etiqueta";
+  if (p.tipo === "linha") {
+    pageW = cols * W + (cols - 1) * p.gapH;
+    css += "@page{size:" + pageW + "mm " + H + "mm;margin:0}.pg{width:" + pageW + "mm;height:" + H + "mm;display:flex;gap:" + p.gapH + "mm;page-break-after:always;overflow:hidden}";
+    for (let i = 0; i < labels.length; i += cols) body += "<div class='pg'>" + labels.slice(i, i + cols).join("") + "</div>";
+  } else if (p.tipo === "folha") {
+    pageW = 210; pageH = 297; modo = "a4";
+    const rows = Math.max(1, Math.floor((297 - p.mt + p.gapV) / (H + p.gapV)));
+    const por = cols * rows;
+    css += "@page{size:210mm 297mm;margin:0}.pg{width:210mm;height:297mm;padding:" + p.mt + "mm 0 0 " + p.ml + "mm;display:grid;grid-template-columns:repeat(" + cols + "," + W + "mm);grid-auto-rows:" + H + "mm;column-gap:" + p.gapH + "mm;row-gap:" + p.gapV + "mm;align-content:start;justify-content:start;page-break-after:always;overflow:hidden}";
+    for (let i = 0; i < labels.length; i += por) body += "<div class='pg'>" + labels.slice(i, i + por).join("") + "</div>";
+  } else {
+    css += "@page{size:" + W + "mm " + H + "mm;margin:0}.pg{width:" + W + "mm;height:" + H + "mm;page-break-after:always;overflow:hidden}";
+    body = labels.map(l => "<div class='pg'>" + l + "</div>").join("");
+  }
+  return { html: "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Etiquetas</title><style>" + css + "</style></head><body>" + body + "</body></html>", pageW: pageW, pageH: pageH, modo: modo };
+}
+
+function etqImprimirModelo(tpl, itens, opts) {
+  const lab = [];
+  if (tpl.papel.tipo === "folha") for (let i = 1; i < (parseInt(opts.inicio) || 1); i++) lab.push(etqLabelHTML(tpl, null, opts, true));
+  itens.forEach(it => lab.push(etqLabelHTML(tpl, it, opts)));
+  const d = etqDocumento(tpl, lab);
+  printHTMLDoc(d.html, "Etiquetas", d.modo, d.modo === "a4" ? null : d.pageW, d.modo === "a4" ? null : d.pageH);
+}
+
+// Chamada principal usada pelas telas (lê modelo e opções salvos em "Configurar")
+function etqImprimir(items) {
+  if (!items || !items.length) return 0;
+  const modelos = etqLoad(), o = etqOpts();
+  const tpl = modelos.find(m => m.id === o.modeloId) || modelos[0];
+  const lista = [];
+  items.forEach(it => {
+    let q = 1;
+    if (o.qtdModo === "estoque") q = Math.max(0, Math.round(+(it.stock != null ? it.stock : (it.qtd || it.quantidade || it.qty || 0)) || 0));
+    else if (o.qtdModo === "n") q = Math.max(1, parseInt(o.qtdN) || 1);
+    for (let i = 0; i < q; i++) lista.push(it);
+  });
+  if (!lista.length) { alert("Nenhuma etiqueta para imprimir (quantidade em estoque zerada)."); return 0; }
+  etqImprimirModelo(tpl, lista, o);
+  return lista.length;
+}
+// Compatibilidade: telas antigas chamam printElginLabels(items, "1col"|"3col")
+function printElginLabels(items) { return etqImprimir(items); }
+
+// ══════════════════════════════ INTERFACE ════════════════════════════════════
+const ETQ_UI = {
+  btn: v => ({
+    display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 14px", borderRadius: 8,
+    border: v === "ghost" ? "1px solid var(--border-default)" : "none",
+    background: v === "primary" ? "#E8682A" : v === "danger" ? "#ff3b3b22" : v === "ghost" ? "transparent" : "var(--bg-elevated)",
+    color: v === "primary" ? "#fff" : v === "danger" ? "#ff3b3b" : "var(--text-primary)",
+    fontFamily: "inherit", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap"
+  }),
+  inp: { background: "var(--bg-app)", border: "1px solid var(--border-default)", borderRadius: 8, padding: "8px 10px", color: "var(--text-primary)", fontFamily: "inherit", fontSize: 13, outline: "none", width: "100%", boxSizing: "border-box" },
+  lab: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 3, display: "block" },
+  overlay: z => ({ position: "fixed", inset: 0, zIndex: z, background: "rgba(0,0,0,.78)", display: "flex", alignItems: "center", justifyContent: "center", padding: 8 })
+};
+
+function EtqNum(p) {
+  const _s = React.useState(String(p.value)), t = _s[0], setT = _s[1];
+  const foc = React.useRef(false);
+  React.useEffect(() => { if (!foc.current) setT(String(p.value)); }, [p.value]);
+  return etqH("label", { style: { display: "block", minWidth: 0 } },
+    etqH("span", { style: ETQ_UI.lab }, p.label),
+    etqH("input", {
+      type: "number", inputMode: "decimal", step: p.step || 0.1, min: p.min, max: p.max, value: t, style: ETQ_UI.inp,
+      onFocus: () => { foc.current = true; },
+      onBlur: () => { foc.current = false; setT(String(p.value)); },
+      onChange: e => { setT(e.target.value); const v = parseFloat(e.target.value); if (!isNaN(v)) p.onChange(v); }
+    }));
+}
+
+// Caixa de diálogo simples (prompt/confirm próprios — window.prompt não existe no Electron)
+function EtqDialog(p) {
+  const _s = React.useState(p.valor || ""), v = _s[0], setV = _s[1];
+  const pede = p.valor !== undefined;
+  return etqH("div", { style: ETQ_UI.overlay(6000) },
+    etqH("div", { style: { background: "var(--bg-card)", color: "var(--text-primary)", borderRadius: 14, padding: 20, width: "100%", maxWidth: 380, border: "1px solid var(--border-default)" } },
+      etqH("div", { style: { fontSize: 15, fontWeight: 700, marginBottom: 12 } }, p.titulo),
+      pede ? etqH("input", { autoFocus: true, style: ETQ_UI.inp, value: v, onChange: e => setV(e.target.value), onKeyDown: e => { if (e.key === "Enter" && v.trim()) p.onOk(v.trim()); } }) : etqH("div", { style: { fontSize: 13, color: "var(--text-secondary)" } }, p.mensagem),
+      etqH("div", { style: { display: "flex", gap: 10, marginTop: 16, justifyContent: "flex-end" } },
+        etqH("button", { style: ETQ_UI.btn("ghost"), onClick: p.onCancel }, "Cancelar"),
+        etqH("button", { style: ETQ_UI.btn(p.perigo ? "danger" : "primary"), onClick: () => { if (pede) { if (v.trim()) p.onOk(v.trim()); } else p.onOk(); } }, p.okLabel || "OK"))));
+}
+
+// ── Canvas do designer (WYSIWYG: mesmo HTML da impressão, apenas ampliado) ──
+function EtqCanvas(p) {
+  const tpl = p.tpl, W = tpl.papel.larg, H = tpl.papel.alt, z = p.zoom;
+  const k = z / (96 / 25.4);
+  const tok = etqTokens(ETQ_SAMPLE, { parcelas: 3, juro: 0 });
+  const drag = React.useRef(null);
+  const start = (e, el, mode) => {
+    e.stopPropagation();
+    p.onSel(el.id);
+    drag.current = { id: el.id, mode: mode, sx: e.clientX, sy: e.clientY, ox: el.x, oy: el.y, ow: el.w, oh: el.h };
+    if (e.currentTarget.setPointerCapture) { try { e.currentTarget.setPointerCapture(e.pointerId); } catch (x) {} }
+  };
+  const move = e => {
+    const d = drag.current; if (!d) return;
+    const dx = (e.clientX - d.sx) / z, dy = (e.clientY - d.sy) / z;
+    if (d.mode === "move") p.onChange(d.id, { x: etqR1(d.ox + dx), y: etqR1(d.oy + dy) });
+    else p.onChange(d.id, { w: Math.max(0.5, etqR1(d.ow + dx)), h: Math.max(0.2, etqR1(d.oh + dy)) });
+  };
+  const end = () => { drag.current = null; };
+  return etqH("div", { style: { position: "relative", width: W * z, height: H * z, background: "#fff", boxShadow: "0 2px 14px rgba(0,0,0,.5)", flex: "none" }, onPointerDown: () => p.onSel(null) },
+    etqH("div", { style: { position: "absolute", left: 0, top: 0, width: W + "mm", height: H + "mm", transformOrigin: "0 0", transform: "scale(" + k + ")" } },
+      tpl.elementos.map(el => {
+        const sel = el.id === p.sel;
+        const css = etqElCss(el);
+        const hit = el.tipo === "linha" ? Math.max(1.6, el.h) : null;
+        const wrap = { position: "absolute", left: el.x + "mm", top: (hit ? el.y - (hit - el.h) / 2 : el.y) + "mm", width: el.w + "mm", height: (hit || el.h) + "mm", cursor: "move", touchAction: "none", userSelect: "none", outline: sel ? "0.3mm dashed #E8682A" : (el.cond ? "0.2mm dotted #8a8da0" : "0.1mm dotted #c9cbe0"), outlineOffset: "0.1mm" };
+        const innerCss = etqCssObj(Object.assign({}, css, { "position": "absolute", "left": "0", "top": "0", "width": "100%", "height": "100%" }));
+        if (el.tipo === "linha") { innerCss.background = "linear-gradient(#000,#000) center/100% " + el.h + "mm no-repeat"; innerCss.height = "100%"; }
+        const ev = { onPointerMove: move, onPointerUp: end, onPointerCancel: end };
+        return etqH("div", Object.assign({ key: el.id, style: wrap, onPointerDown: e => start(e, el, "move") }, ev),
+          etqH("div", { style: innerCss, dangerouslySetInnerHTML: { __html: etqElInner(el, tok) } }),
+          sel ? etqH("div", Object.assign({ style: { position: "absolute", right: 0, bottom: 0, width: "1.8mm", height: "1.8mm", background: "#E8682A", cursor: "nwse-resize", touchAction: "none" }, onPointerDown: e => start(e, el, "resize") }, ev)) : null);
+      })));
+}
+
+const ETQ_CAMPOS = [
+  ["Descrição", "texto", { texto: "{DESCRICAO}", negrito: true, caixaAlta: true, h: 8 }],
+  ["Preço", "texto", { texto: "{PRECO}", negrito: true, pt: 14, h: 7 }],
+  ["Cód. barras", "barras", { h: 9 }],
+  ["Cód. número", "texto", { texto: "{CODIGO}", pt: 5, h: 3 }],
+  ["Parcelamento", "texto", { texto: "A Prazo R$ {PRAZO}\n{N}x de R$ {PARCELA}", pt: 6, h: 7, cond: "parcelado" }],
+  ["Unidade", "texto", { texto: "{UNID}", pt: 6, h: 3 }],
+  ["Texto livre", "texto", { texto: "Texto", pt: 7, h: 4 }],
+  ["Linha", "linha", { h: 0.3 }]
+];
+const etqNomeEl = el => el.tipo === "barras" ? "Código de barras" : el.tipo === "linha" ? "Linha" : (el.texto || "(vazio)").split("\n")[0].slice(0, 22);
+
+// ── Designer (botão "Configurar") ───────────────────────────────────────────
+function EtqDesigner(p) {
+  const _d = React.useState(() => etqClone(p.modelo)), d = _d[0], setD = _d[1];
+  const _s = React.useState(null), sel = _s[0], setSel = _s[1];
+  const _a = React.useState("campo"), aba = _a[0], setAba = _a[1];
+  const _z = React.useState(1), zm = _z[0], setZm = _z[1];
+  const _c = React.useState(false), confAuto = _c[0], setConfAuto = _c[1];
+  const W = d.papel.larg, H = d.papel.alt;
+  const vw = typeof window !== "undefined" ? window.innerWidth : 800;
+  const base = etqClamp(Math.min(Math.max(260, Math.min(vw - 90, 520)) / W, 330 / H), 2, 18);
+  const zoom = base * zm;
+  const el = d.elementos.find(e => e.id === sel) || null;
+  const setEl = (id, patch) => setD(prev => Object.assign({}, prev, { elementos: prev.elementos.map(e => e.id === id ? Object.assign({}, e, patch) : e) }));
+  const setPapel = patch => setD(prev => Object.assign({}, prev, { papel: Object.assign({}, prev.papel, patch) }));
+  const add = c => {
+    const novo = etqEl(c[1], Object.assign({ x: 1, y: 1, w: etqR1(Math.max(2, Math.min(W - 2, 24))) }, c[2]));
+    setD(prev => Object.assign({}, prev, { elementos: prev.elementos.concat([novo]) }));
+    setSel(novo.id); setAba("campo");
+  };
+  const del = () => { if (!el) return; setD(prev => Object.assign({}, prev, { elementos: prev.elementos.filter(e => e.id !== el.id) })); setSel(null); };
+  const dup = () => { if (!el) return; const c = Object.assign({}, el, { id: etqId(), x: etqR1(el.x + 1), y: etqR1(el.y + 1) }); setD(prev => Object.assign({}, prev, { elementos: prev.elementos.concat([c]) })); setSel(c.id); };
+  const testar = () => {
+    const n = d.papel.tipo === "folha" ? d.papel.cols * 2 : Math.max(1, d.papel.tipo === "linha" ? d.papel.cols : 1);
+    const itens = []; for (let i = 0; i < n; i++) itens.push(ETQ_SAMPLE);
+    etqImprimirModelo(d, itens, { parcelado: true, parcelas: 3, juro: 0, inicio: 1 });
+  };
+  const chk = (label, val, on) => etqH("label", { style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-primary)", cursor: "pointer" } },
+    etqH("input", { type: "checkbox", checked: !!val, onChange: e => on(e.target.checked), style: { accentColor: "#E8682A" } }), label);
+  const sel2 = (label, val, opts, on) => etqH("label", { style: { display: "block" } }, etqH("span", { style: ETQ_UI.lab }, label),
+    etqH("select", { style: ETQ_UI.inp, value: val, onChange: e => on(e.target.value) }, opts.map(o => etqH("option", { key: o[0], value: o[0] }, o[1]))));
+  const grid2 = (...c) => etqH("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 } }, ...c);
+  const tab = (id, t) => etqH("button", { onClick: () => setAba(id), style: Object.assign({}, ETQ_UI.btn(aba === id ? "primary" : "ghost"), { flex: 1, padding: "7px 8px", fontSize: 12 }) }, t);
+
+  let painel;
+  if (aba === "papel") {
+    const pp = d.papel;
+    painel = etqH("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
+      etqH("label", null, etqH("span", { style: ETQ_UI.lab }, "Nome do modelo"), etqH("input", { style: ETQ_UI.inp, value: d.nome, onChange: e => setD(prev => Object.assign({}, prev, { nome: e.target.value })) })),
+      sel2("Tipo de papel", pp.tipo, [["etiqueta", "Rolo — 1 etiqueta por página (térmica)"], ["linha", "Rolo — linha com N colunas por página"], ["folha", "Folha A4 (grade de etiquetas)"]], v => setPapel({ tipo: v, cols: v === "etiqueta" ? 1 : Math.max(2, pp.cols) })),
+      grid2(etqH(EtqNum, { label: "Largura da etiqueta (mm)", value: pp.larg, min: 5, step: 0.5, onChange: v => setPapel({ larg: Math.max(5, v) }) }), etqH(EtqNum, { label: "Altura da etiqueta (mm)", value: pp.alt, min: 5, step: 0.5, onChange: v => setPapel({ alt: Math.max(5, v) }) })),
+      pp.tipo !== "etiqueta" ? grid2(etqH(EtqNum, { label: "Colunas", value: pp.cols, min: 1, step: 1, onChange: v => setPapel({ cols: Math.max(1, Math.round(v)) }) }), etqH(EtqNum, { label: "Espaço entre colunas (mm)", value: pp.gapH, min: 0, onChange: v => setPapel({ gapH: Math.max(0, v) }) })) : null,
+      pp.tipo === "folha" ? grid2(etqH(EtqNum, { label: "Espaço entre linhas (mm)", value: pp.gapV, min: 0, onChange: v => setPapel({ gapV: Math.max(0, v) }) }), etqH("div")) : null,
+      pp.tipo === "folha" ? grid2(etqH(EtqNum, { label: "Margem esquerda (mm)", value: pp.ml, min: 0, onChange: v => setPapel({ ml: Math.max(0, v) }) }), etqH(EtqNum, { label: "Margem superior (mm)", value: pp.mt, min: 0, onChange: v => setPapel({ mt: Math.max(0, v) }) })) : null,
+      chk("Imprimir contorno tracejado (para testes de alinhamento)", pp.borda, v => setPapel({ borda: v })),
+      etqH("button", { style: ETQ_UI.btn("ghost"), onClick: () => setConfAuto(true) }, "↻ Reorganizar campos automaticamente"),
+      etqH("div", { style: { fontSize: 11, color: "var(--text-secondary)" } }, "Dica: ao mudar o tamanho da etiqueta, arraste os campos ou use “Reorganizar” para ajustar o layout ao novo tamanho."));
+  } else if (!el) {
+    painel = etqH("div", { style: { fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6 } },
+      "Toque em um campo da etiqueta para editar. Arraste para mover e use o quadrado laranja no canto para redimensionar.",
+      etqH("div", { style: { marginTop: 10 } }, sel2("Ou escolha um campo", "", [["", "— selecione —"]].concat(d.elementos.map((e, i) => [e.id, (i + 1) + ". " + etqNomeEl(e)])), v => setSel(v || null))),
+      etqH("div", { style: { marginTop: 12, fontSize: 11 } }, "Variáveis para usar nos textos: ", etqH("b", null, "{DESCRICAO} {PRECO} {PRECO_NUM} {CODIGO} {REF} {UNID} {PRAZO} {N} {PARCELA} {JURO} {DATA}")));
+  } else {
+    const bar = el.tipo === "barras" ? etqBar(ETQ_SAMPLE.barcode, el.formato) : null;
+    const mod = bar && bar.modulos ? el.w / bar.modulos : 0;
+    painel = etqH("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
+      sel2("Campo", el.id, d.elementos.map((e, i) => [e.id, (i + 1) + ". " + etqNomeEl(e)]), v => setSel(v)),
+      grid2(etqH(EtqNum, { label: "X (mm)", value: el.x, onChange: v => setEl(el.id, { x: v }) }), etqH(EtqNum, { label: "Y (mm)", value: el.y, onChange: v => setEl(el.id, { y: v }) })),
+      grid2(etqH(EtqNum, { label: "Largura (mm)", value: el.w, min: 0.5, onChange: v => setEl(el.id, { w: Math.max(0.5, v) }) }), etqH(EtqNum, { label: el.tipo === "linha" ? "Espessura (mm)" : "Altura (mm)", value: el.h, min: 0.1, onChange: v => setEl(el.id, { h: Math.max(0.1, v) }) })),
+      el.tipo === "texto" ? etqH("label", null, etqH("span", { style: ETQ_UI.lab }, "Texto (use as variáveis; Enter = nova linha)"), etqH("textarea", { style: Object.assign({}, ETQ_UI.inp, { minHeight: 64, resize: "vertical" }), value: el.texto, onChange: e => setEl(el.id, { texto: e.target.value }) })) : null,
+      el.tipo === "texto" ? grid2(etqH(EtqNum, { label: "Fonte (pt)", value: el.pt, min: 3, step: 0.5, onChange: v => setEl(el.id, { pt: Math.max(3, v) }) }), sel2("Alinhamento", el.alinha, [["left", "Esquerda"], ["center", "Centro"], ["right", "Direita"]], v => setEl(el.id, { alinha: v }))) : null,
+      el.tipo === "texto" ? etqH("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px 14px" } }, chk("Negrito", el.negrito, v => setEl(el.id, { negrito: v })), chk("MAIÚSCULAS", el.caixaAlta, v => setEl(el.id, { caixaAlta: v })), chk("Ajustar fonte ao espaço", el.ajustar, v => setEl(el.id, { ajustar: v })), chk("Moldura", el.borda, v => setEl(el.id, { borda: v }))) : null,
+      el.tipo === "barras" ? sel2("Tipo de código", el.formato, [["code128", "Code 128 (qualquer código)"], ["ean13", "EAN-13 (se o código tiver 13 dígitos)"]], v => setEl(el.id, { formato: v })) : null,
+      el.tipo === "barras" ? etqH("div", { style: { fontSize: 11, color: mod && mod < 0.19 ? "#ff3b3b" : "var(--text-secondary)" } }, mod ? "Barra mais fina ≈ " + mod.toFixed(2).replace(".", ",") + " mm" + (mod < 0.19 ? " — estreita demais, pode não ler. Aumente a largura." : " — leitura OK (mín. recomendado 0,19 mm).") : "Sem código de exemplo.") : null,
+      sel2("Quando imprimir", el.cond, [["", "Sempre"], ["parcelado", "Somente se “Imprimir parcelamento” estiver marcado"]], v => setEl(el.id, { cond: v })),
+      etqH("div", { style: { display: "flex", gap: 8 } }, etqH("button", { style: Object.assign({}, ETQ_UI.btn(), { flex: 1 }), onClick: dup }, "⧉ Duplicar"), etqH("button", { style: Object.assign({}, ETQ_UI.btn("danger"), { flex: 1 }), onClick: del }, "🗑 Excluir")));
+  }
+
+  return etqH("div", { style: ETQ_UI.overlay(5500) },
+    etqH("div", { style: { background: "var(--bg-card)", color: "var(--text-primary)", borderRadius: 14, width: "100%", maxWidth: 1060, maxHeight: "100%", display: "flex", flexDirection: "column", border: "1px solid var(--border-default)" } },
+      etqH("div", { style: { padding: "14px 16px", borderBottom: "1px solid var(--border-default)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } },
+        etqH("div", { style: { fontWeight: 700, fontSize: 15, color: "#E8682A" } }, "⚙ Configurar etiqueta"),
+        etqH("div", { style: { fontSize: 12, color: "var(--text-secondary)", flex: 1, minWidth: 120 } }, d.nome + " · " + etqResumo(d))),
+      etqH("div", { style: { padding: 16, overflowY: "auto", display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" } },
+        etqH("div", { style: { flex: "1 1 340px", minWidth: 0 } },
+          etqH("div", { style: { display: "flex", gap: 6, alignItems: "center", marginBottom: 8 } },
+            etqH("span", { style: { fontSize: 11, color: "var(--text-secondary)", flex: 1 } }, "Pré-visualização com dados de exemplo"),
+            etqH("button", { style: Object.assign({}, ETQ_UI.btn("ghost"), { padding: "4px 10px" }), onClick: () => setZm(z => Math.max(0.4, z / 1.25)) }, "−"),
+            etqH("button", { style: Object.assign({}, ETQ_UI.btn("ghost"), { padding: "4px 10px" }), onClick: () => setZm(z => Math.min(4, z * 1.25)) }, "+")),
+          etqH("div", { style: { background: "#20233c", borderRadius: 10, padding: 18, overflow: "auto", display: "flex", justifyContent: "center", maxHeight: 420 } },
+            etqH(EtqCanvas, { tpl: d, sel: sel, zoom: zoom, onSel: id => { setSel(id); if (id) setAba("campo"); }, onChange: setEl })),
+          etqH("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 } },
+            etqH("span", { style: { fontSize: 11, color: "var(--text-secondary)", width: "100%" } }, "Adicionar campo:"),
+            ETQ_CAMPOS.map(c => etqH("button", { key: c[0], style: Object.assign({}, ETQ_UI.btn(), { padding: "6px 10px", fontSize: 12 }), onClick: () => add(c) }, "+ " + c[0])))),
+        etqH("div", { style: { flex: "1 1 300px", minWidth: 0 } },
+          etqH("div", { style: { display: "flex", gap: 6, marginBottom: 12 } }, tab("campo", "Campo"), tab("papel", "Papel e tamanho")),
+          painel)),
+      etqH("div", { style: { padding: "12px 16px", borderTop: "1px solid var(--border-default)", display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" } },
+        etqH("button", { style: ETQ_UI.btn("ghost"), onClick: p.onCancel }, "Cancelar"),
+        etqH("button", { style: ETQ_UI.btn(), onClick: testar }, "🖨 Testar impressão"),
+        etqH("button", { style: ETQ_UI.btn("primary"), onClick: () => p.onSave(d) }, "Salvar"))),
+    confAuto ? etqH(EtqDialog, { titulo: "Reorganizar campos", mensagem: "Isso substitui todos os campos atuais por um layout automático para " + W + " × " + H + " mm. Continuar?", okLabel: "Reorganizar", onCancel: () => setConfAuto(false), onOk: () => { setD(prev => Object.assign({}, prev, { elementos: etqAuto(prev.papel.larg, prev.papel.alt, prev.elementos.some(e => e.cond === "parcelado")) })); setSel(null); setConfAuto(false); } }) : null);
+}
+
+// ── Gerenciador de modelos (lista + Configurar / Copiar / Renomear / Excluir) ─
+function EtqGerenciador(p) {
+  const _m = React.useState(etqLoad), lista = _m[0], setLista = _m[1];
+  const _s = React.useState(() => etqOpts().modeloId), sel = _s[0], setSel = _s[1];
+  const _e = React.useState(null), edit = _e[0], setEdit = _e[1];
+  const _d = React.useState(null), dlg = _d[0], setDlg = _d[1];
+  const grava = l => { setLista(l); etqSaveAll(l); if (p.onChange) p.onChange(l); };
+  const atual = lista.find(m => m.id === sel) || lista[0];
+  const novoId = () => "m" + Date.now().toString(36);
+  const bt = (t, fn, v, dis) => etqH("button", { disabled: dis, style: Object.assign({}, ETQ_UI.btn(v), { opacity: dis ? 0.4 : 1, flex: "1 1 auto" }), onClick: fn }, t);
+  return etqH("div", { style: ETQ_UI.overlay(5000) },
+    etqH("div", { style: { background: "var(--bg-card)", color: "var(--text-primary)", borderRadius: 14, width: "100%", maxWidth: 560, maxHeight: "100%", display: "flex", flexDirection: "column", border: "1px solid var(--border-default)" } },
+      etqH("div", { style: { padding: "14px 16px", borderBottom: "1px solid var(--border-default)" } },
+        etqH("div", { style: { fontWeight: 700, fontSize: 15, color: "#E8682A" } }, "🏷️ Etiquetas — modelos"),
+        etqH("div", { style: { fontSize: 12, color: "var(--text-secondary)", marginTop: 2 } }, "Escolha um modelo e toque em Configurar para ajustar tamanho, colunas e campos.")),
+      etqH("div", { style: { padding: 16, overflowY: "auto", flex: 1 } },
+        etqH("div", { style: { border: "1px solid var(--border-default)", borderRadius: 10, overflow: "hidden" } },
+          lista.map(m => etqH("div", { key: m.id, onClick: () => setSel(m.id), onDoubleClick: () => setEdit(m), style: { padding: "10px 12px", cursor: "pointer", borderBottom: "1px solid var(--border-default)", background: m.id === (atual && atual.id) ? "#E8682A22" : "transparent", display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" } },
+            etqH("div", { style: { fontSize: 13, fontWeight: m.id === (atual && atual.id) ? 700 : 500 } }, m.nome),
+            etqH("div", { style: { fontSize: 11, color: "var(--text-secondary)", textAlign: "right" } }, etqResumo(m))))),
+        etqH("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 } },
+          bt("⚙ Configurar", () => atual && setEdit(atual), "primary"),
+          bt("Copiar", () => atual && setDlg({ t: "copiar", v: atual.nome + " (cópia)" })),
+          bt("Renomear", () => atual && setDlg({ t: "renomear", v: atual.nome })),
+          bt("Excluir", () => atual && setDlg({ t: "excluir" }), "danger", lista.length <= 1)),
+        etqH("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 } },
+          bt("+ Novo modelo", () => setDlg({ t: "novo", v: "Novo modelo" }), "ghost"),
+          bt("Restaurar padrões", () => setDlg({ t: "restaurar" }), "ghost"))),
+      etqH("div", { style: { padding: "12px 16px", borderTop: "1px solid var(--border-default)", display: "flex", justifyContent: "flex-end", gap: 10 } },
+        etqH("button", { style: ETQ_UI.btn("ghost"), onClick: () => p.onClose() }, "Fechar"),
+        etqH("button", { style: ETQ_UI.btn("primary"), onClick: () => { const o = Object.assign(etqOpts(), { modeloId: atual.id }); save(ETQ_OPT_KEY, o); p.onClose(atual.id); } }, "Usar este modelo"))),
+    edit ? etqH(EtqDesigner, { modelo: edit, onCancel: () => setEdit(null), onSave: m => { grava(lista.map(x => x.id === m.id ? m : x)); setEdit(null); } }) : null,
+    dlg && (dlg.t === "copiar" || dlg.t === "renomear" || dlg.t === "novo") ? etqH(EtqDialog, {
+      titulo: dlg.t === "copiar" ? "Copiar modelo" : dlg.t === "renomear" ? "Renomear modelo" : "Novo modelo", valor: dlg.v, okLabel: "OK", onCancel: () => setDlg(null),
+      onOk: nome => {
+        if (dlg.t === "renomear") grava(lista.map(x => x.id === atual.id ? Object.assign({}, x, { nome: nome }) : x));
+        else if (dlg.t === "copiar") { const c = etqClone(atual); c.id = novoId(); c.nome = nome; c.elementos.forEach(e => { e.id = etqId(); }); grava(lista.concat([c])); setSel(c.id); }
+        else { const c = { id: novoId(), nome: nome, papel: { tipo: "etiqueta", larg: 40, alt: 25, cols: 1, gapH: 0, gapV: 0, ml: 0, mt: 0, borda: false }, elementos: etqAuto(40, 25, false) }; grava(lista.concat([c])); setSel(c.id); setEdit(c); }
+        setDlg(null);
+      }
+    }) : null,
+    dlg && dlg.t === "excluir" ? etqH(EtqDialog, { titulo: "Excluir modelo", mensagem: "Excluir “" + atual.nome + "”? Esta ação não pode ser desfeita.", okLabel: "Excluir", perigo: true, onCancel: () => setDlg(null), onOk: () => { const l = lista.filter(x => x.id !== atual.id); grava(l); setSel(l[0].id); setDlg(null); } }) : null,
+    dlg && dlg.t === "restaurar" ? etqH(EtqDialog, { titulo: "Restaurar padrões", mensagem: "Os modelos que vieram com o sistema voltam ao original (alterações neles serão perdidas). Seus modelos próprios são mantidos.", okLabel: "Restaurar", onCancel: () => setDlg(null), onOk: () => { const pad = etqPadroes(), ids = pad.map(x => x.id); grava(pad.concat(lista.filter(x => ids.indexOf(x.id) < 0))); setDlg(null); } }) : null);
+}
+
+// ── Opções dentro da janela "Imprimir etiqueta" ─────────────────────────────
+function EtqOpcoes() {
+  const _m = React.useState(etqLoad), modelos = _m[0], setModelos = _m[1];
+  const _o = React.useState(etqOpts), o = _o[0], setO = _o[1];
+  const _g = React.useState(false), ger = _g[0], setGer = _g[1];
+  const upd = pt => { const n = Object.assign({}, o, pt); setO(n); save(ETQ_OPT_KEY, n); };
+  const tpl = modelos.find(m => m.id === o.modeloId) || modelos[0];
+  const temParc = tpl.elementos.some(e => e.cond === "parcelado");
+  const radio = (v, label, extra) => etqH("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text-primary)", cursor: "pointer", padding: "3px 0" } },
+    etqH("input", { type: "radio", name: "etq-qtd", checked: o.qtdModo === v, onChange: () => upd({ qtdModo: v }), style: { accentColor: "#E8682A" } }), label, ...(extra || []));
+  const mini = (val, on, dis, w) => etqH("input", { type: "number", min: 1, step: 1, disabled: dis, value: val, onChange: e => on(e.target.value), style: Object.assign({}, ETQ_UI.inp, { width: w || 64, padding: "5px 8px", opacity: dis ? 0.5 : 1 }) });
+  return etqH("div", { style: { marginBottom: 16 } },
+    etqH("div", { style: { fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 } }, "Modelo de etiqueta"),
+    etqH("div", { style: { display: "flex", gap: 8 } },
+      etqH("select", { style: Object.assign({}, ETQ_UI.inp, { flex: 1, minWidth: 0 }), value: tpl.id, onChange: e => upd({ modeloId: e.target.value }) }, modelos.map(m => etqH("option", { key: m.id, value: m.id }, m.nome))),
+      etqH("button", { style: ETQ_UI.btn(), onClick: () => setGer(true) }, "⚙ Configurar")),
+    etqH("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 4 } }, etqResumo(tpl)),
+    etqH("div", { style: { fontSize: 12, color: "var(--text-secondary)", margin: "14px 0 4px" } }, "Quantidade"),
+    radio("um", "1 etiqueta para cada produto"),
+    radio("n", "", [mini(o.qtdN, v => upd({ qtdN: v }), o.qtdModo !== "n"), "para cada produto"]),
+    radio("estoque", "Quantidade em estoque"),
+    tpl.papel.tipo === "folha" ? etqH("div", { style: { display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 13, color: "var(--text-primary)" } }, "Começar na etiqueta nº", mini(o.inicio, v => upd({ inicio: v }), false, 64), etqH("span", { style: { fontSize: 11, color: "var(--text-secondary)" } }, "(para folhas já usadas)")) : null,
+    etqH("div", { style: { fontSize: 12, color: "var(--text-secondary)", margin: "14px 0 4px" } }, "Venda parcelada"),
+    etqH("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text-primary)", cursor: "pointer" } },
+      etqH("input", { type: "checkbox", checked: !!o.parcelado, onChange: e => upd({ parcelado: e.target.checked }), style: { accentColor: "#E8682A" } }), "Imprimir parcelamento",
+      etqH("span", { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-secondary)" } }, "Parcelas", mini(o.parcelas, v => upd({ parcelas: v }), !o.parcelado, 56), "% Juro", etqH("input", { type: "number", min: 0, step: 0.1, disabled: !o.parcelado, value: o.juro, onChange: e => upd({ juro: e.target.value }), style: Object.assign({}, ETQ_UI.inp, { width: 60, padding: "5px 8px", opacity: o.parcelado ? 1 : 0.5 }) }))),
+    o.parcelado && !temParc ? etqH("div", { style: { fontSize: 11, color: "#F07030", marginTop: 6 } }, "⚠ Este modelo não tem campo de parcelamento. Use “Configurar” → “+ Parcelamento”, ou escolha o modelo “… - Parcelamento”.") : null,
+    ger ? etqH(EtqGerenciador, { onChange: l => setModelos(l), onClose: id => { setModelos(etqLoad()); setO(etqOpts()); setGer(false); } }) : null);
+}
+
 const load = (k, d) => {
   try {
     const v = localStorage.getItem(k);
@@ -654,7 +1154,7 @@ const retryTombstones = async () => {
 
 // ── BANCO DE DADOS: SERVIDOR É A FONTE ÚNICA DE VERDADE ───────────────────────
 // ── SUPABASE DIRETO ──────────────────────────────────────────────────────────
-const SUPABASE_URL = localStorage.getItem('_sb_url') || "https://cjtjhdocbplytpoyieju.supabase.co";
+const SUPABASE_URL = localStorage.getItem('_sb_url') || "https://jyrugkklsacswgysjser.supabase.co";
 const _SB_KEY = () => localStorage.getItem('_sb_key') || sessionStorage.getItem('_sb_key') || "";
 const _SB_H = () => ({
   'Content-Type': 'application/json',
@@ -664,13 +1164,13 @@ const _SB_H = () => ({
 });
 
 // ── BUSCA DE PRODUTO POR CÓDIGO DE BARRAS (Cosmos, via Edge Function) ────────
-// Consulta a Edge Function 'cosmo' criada no Supabase, que por sua vez
-// chama a API da SI5 Global (com cache) usando o token guardado nos Secrets do projeto.
+// Consulta a Edge Function 'cosmos-lookup' criada no Supabase, que por sua vez
+// chama a API do Cosmos (Bluesoft) com o token guardado nos Secrets do projeto.
 const buscarProdutoCosmos = async (gtin) => {
   const codigo = (gtin || '').trim();
   if (!codigo) return { ok: false, error: 'Código de barras vazio' };
   try {
-    const r = await fetch(SUPABASE_URL + '/functions/v1/cosmo?gtin=' + encodeURIComponent(codigo), {
+    const r = await fetch(SUPABASE_URL + '/functions/v1/cosmos-lookup?gtin=' + encodeURIComponent(codigo), {
       method: 'GET',
       headers: {
         'apikey': _SB_KEY(),
@@ -2126,7 +2626,7 @@ function ProductSheet(_ref9) {
     }
     const d = res.data;
     if (!d.description) {
-      setCosmosMsg("Produto não encontrado na base de produtos");
+      setCosmosMsg("Produto não encontrado na base do Cosmos");
       return;
     }
     setCosmosResultado(d);
@@ -2138,7 +2638,7 @@ function ProductSheet(_ref9) {
   };
   const usarCosmosDescricao = () => {
     if (!cosmosResultado) return;
-    const partes = [cosmosResultado.brand, cosmosResultado.category || cosmosResultado.gpc_description].filter(Boolean);
+    const partes = [cosmosResultado.brand, cosmosResultado.gpc_description].filter(Boolean);
     set("description", partes.length ? partes.join(" · ") : cosmosResultado.description);
   };
   const usarCosmosFoto = () => {
@@ -7568,29 +8068,10 @@ function ListaComprasPage(_ref20) {
   etiquetaModal && /*#__PURE__*/React.createElement("div", {
     style: { position: "fixed", inset: 0, zIndex: 4000, background: "rgba(0,0,0,.75)", display: "flex", alignItems: "flex-end" }
   }, /*#__PURE__*/React.createElement("div", {
-    style: { background: "#12142A", borderRadius: "20px 20px 0 0", padding: 24, width: "100%", maxWidth: 480, margin: "0 auto" }
+    style: { background: "var(--bg-card)", borderRadius: "20px 20px 0 0", padding: 24, width: "100%", maxWidth: 480, margin: "0 auto", maxHeight: "92vh", overflowY: "auto" }
   }, /*#__PURE__*/React.createElement("div", { style: { fontSize: 16, fontWeight: 700, marginBottom: 4, color: "#E8682A" } }, "🏷️ Imprimir Etiqueta"),
   /*#__PURE__*/React.createElement("div", { style: { fontSize: 13, color: "var(--text-secondary)", marginBottom: 18 } }, etiquetaModal.length, " produto(s) selecionado(s)"),
-  /*#__PURE__*/React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 } }, "Layout (Elgin L42 Pro Full)"),
-  /*#__PURE__*/React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 20 } },
-    /*#__PURE__*/React.createElement("button", {
-      onClick: () => setEtiquetaLayout("1col"),
-      style: {
-        flex: 1, padding: "14px 8px", borderRadius: 12, cursor: "pointer", fontFamily: "inherit",
-        border: "2px solid " + (etiquetaLayout === "1col" ? "#E8682A" : "var(--bg-elevated)"),
-        background: etiquetaLayout === "1col" ? "#E8682A15" : "var(--bg-elevated)",
-        color: etiquetaLayout === "1col" ? "#E8682A" : "#8a8da0"
-      }
-    }, /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13 } }, "1 Coluna"), /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, marginTop: 2 } }, "30 x 60 mm")),
-    /*#__PURE__*/React.createElement("button", {
-      onClick: () => setEtiquetaLayout("3col"),
-      style: {
-        flex: 1, padding: "14px 8px", borderRadius: 12, cursor: "pointer", fontFamily: "inherit",
-        border: "2px solid " + (etiquetaLayout === "3col" ? "#E8682A" : "var(--bg-elevated)"),
-        background: etiquetaLayout === "3col" ? "#E8682A15" : "var(--bg-elevated)",
-        color: etiquetaLayout === "3col" ? "#E8682A" : "#8a8da0"
-      }
-    }, /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13 } }, "3 Colunas"), /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, marginTop: 2 } }, "20 x 30 mm"))),
+  /*#__PURE__*/React.createElement(EtqOpcoes, null),
   /*#__PURE__*/React.createElement("div", { style: { display: "flex", gap: 10 } },
     /*#__PURE__*/React.createElement("button", {
       onClick: () => setEtiquetaModal(null),
@@ -18080,29 +18561,10 @@ function PDVApp() {
   }), etiquetaProdModal && /*#__PURE__*/React.createElement("div", {
     style: { position: "fixed", inset: 0, zIndex: 4000, background: "rgba(0,0,0,.75)", display: "flex", alignItems: "flex-end" }
   }, /*#__PURE__*/React.createElement("div", {
-    style: { background: "var(--bg-card)", borderRadius: "20px 20px 0 0", padding: 24, width: "100%", maxWidth: 480, margin: "0 auto" }
+    style: { background: "var(--bg-card)", borderRadius: "20px 20px 0 0", padding: 24, width: "100%", maxWidth: 480, margin: "0 auto", maxHeight: "92vh", overflowY: "auto" }
   }, /*#__PURE__*/React.createElement("div", { style: { fontSize: 16, fontWeight: 700, marginBottom: 4, color: "#E8682A" } }, "🏷️ Imprimir Etiqueta"),
   /*#__PURE__*/React.createElement("div", { style: { fontSize: 13, color: "var(--text-secondary)", marginBottom: 18 } }, etiquetaProdModal.name),
-  /*#__PURE__*/React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 } }, "Layout (Elgin L42 Pro Full)"),
-  /*#__PURE__*/React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 20 } },
-    /*#__PURE__*/React.createElement("button", {
-      onClick: () => setEtiquetaProdLayout("1col"),
-      style: {
-        flex: 1, padding: "14px 8px", borderRadius: 12, cursor: "pointer", fontFamily: "inherit",
-        border: "2px solid " + (etiquetaProdLayout === "1col" ? "#E8682A" : "var(--border-default)"),
-        background: etiquetaProdLayout === "1col" ? "#E8682A15" : "var(--bg-elevated)",
-        color: etiquetaProdLayout === "1col" ? "#E8682A" : "var(--text-secondary)"
-      }
-    }, /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13 } }, "1 Coluna"), /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, marginTop: 2 } }, "30 x 60 mm")),
-    /*#__PURE__*/React.createElement("button", {
-      onClick: () => setEtiquetaProdLayout("3col"),
-      style: {
-        flex: 1, padding: "14px 8px", borderRadius: 12, cursor: "pointer", fontFamily: "inherit",
-        border: "2px solid " + (etiquetaProdLayout === "3col" ? "#E8682A" : "var(--border-default)"),
-        background: etiquetaProdLayout === "3col" ? "#E8682A15" : "var(--bg-elevated)",
-        color: etiquetaProdLayout === "3col" ? "#E8682A" : "var(--text-secondary)"
-      }
-    }, /*#__PURE__*/React.createElement("div", { style: { fontWeight: 700, fontSize: 13 } }, "3 Colunas"), /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, marginTop: 2 } }, "20 x 30 mm"))),
+  /*#__PURE__*/React.createElement(EtqOpcoes, null),
   !etiquetaProdModal.barcode && /*#__PURE__*/React.createElement("div", {
     style: { background: "#f59e0b15", border: "1px solid #f59e0b50", borderRadius: 10, padding: "8px 12px", marginBottom: 16, fontSize: 12, color: "#f59e0b" }
   }, "⚠ Este produto não tem código de barras cadastrado — a etiqueta sairá sem código."),
