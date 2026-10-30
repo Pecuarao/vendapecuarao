@@ -557,6 +557,7 @@ const diffDias = (a, b) => {
 // ══════════════════════════════════════════════════════════════════════════════
 const ETQ_KEY = "pec_etq_modelos_v1";
 const ETQ_OPT_KEY = "pec_etq_opcoes_v1";
+const ETQ_LIM_MIN = 60, ETQ_LIM_MAX = 110; // largura de papel aceita pela Elgin L42 Pro (mm)
 const ETQ_SAMPLE = { name: "Ração Cão Adulto Raças 25 kg", price: 210, barcode: "7891234567895", stock: 12, unit: "sc", ref: "1034" };
 const etqH = React.createElement;
 const etqR1 = v => Math.round(v * 10) / 10;
@@ -597,44 +598,85 @@ function etqAuto(W, H, parc) {
 }
 
 function etqPadroes() {
-  const mk = (id, nome, tipo, W, H, cols, gapH, gapV, ml, mt, parc) => ({
-    id: id, nome: nome,
-    papel: { tipo: tipo, larg: W, alt: H, cols: cols, gapH: gapH, gapV: gapV, ml: ml, mt: mt, borda: false },
-    elementos: etqAuto(W, H, !!parc)
-  });
+  // Rolo: gapV = vão entre etiquetas (altura); largPapel = largura total do papel (Elgin: 60 a 110 mm)
+  const mk = (id, nome, tipo, W, H, cols, gapH, gapV, ml, mt, parc, legado) => {
+    const conteudo = tipo === "linha" ? cols * W + (cols - 1) * gapH : W;
+    return {
+      id: id, nome: nome,
+      papel: { tipo: tipo, larg: W, alt: H, cols: cols, gapH: gapH, gapV: gapV, ml: ml, mt: mt, borda: false,
+        largPapel: tipo === "folha" || legado ? 0 : Math.max(ETQ_LIM_MIN, Math.ceil(conteudo)), centralizar: true, offX: 0, offY: 0 },
+      elementos: etqAuto(W, H, !!parc)
+    };
+  };
   return [
-    mk("elgin-1col", "Elgin L42 - 1 Coluna - 30 x 60", "etiqueta", 30, 60, 1, 0, 0, 0, 0),
-    mk("elgin-3col", "Elgin L42 - 3 Colunas - 20 x 30", "etiqueta", 20, 30, 1, 0, 0, 0, 0),
-    mk("1c-60x30", "1 Coluna - 60 x 30", "etiqueta", 60, 30, 1, 0, 0, 0, 0),
-    mk("1c-110x30", "1 Coluna - 110 x 30", "etiqueta", 110, 30, 1, 0, 0, 0, 0),
-    mk("2c-50x30", "2 Colunas - 50 x 30", "linha", 50, 30, 2, 2, 0, 0, 0),
-    mk("3c-33x30", "3 Colunas - 33 x 30", "linha", 33, 30, 3, 2, 0, 0, 0),
-    mk("3c-33x30-parc", "3 Colunas - 33 x 30 - Parcelamento", "linha", 33, 30, 3, 2, 0, 0, 0, true),
-    mk("5c-25x15", "5 Colunas - 25 x 15", "linha", 25, 15, 5, 2, 0, 0, 0),
+    mk("elgin-1col", "Elgin L42 - 1 Coluna - 30 x 60", "etiqueta", 30, 60, 1, 0, 0, 0, 0, false, true),
+    mk("elgin-3col", "Elgin L42 - 3 Colunas - 20 x 30 (1 por página)", "etiqueta", 20, 30, 1, 0, 0, 0, 0, false, true),
+    mk("elgin-3col-linha", "Elgin L42 - 3 Colunas - 20 x 30 (em linha)", "linha", 20, 30, 3, 0, 3, 0, 0),
+    mk("1c-60x30", "1 Coluna - 60 x 30", "etiqueta", 60, 30, 1, 0, 3, 0, 0),
+    mk("1c-110x30", "1 Coluna - 110 x 30", "etiqueta", 110, 30, 1, 0, 3, 0, 0),
+    mk("2c-50x30", "2 Colunas - 50 x 30", "linha", 50, 30, 2, 2, 3, 0, 0),
+    mk("3c-33x30", "3 Colunas - 33 x 30", "linha", 33, 30, 3, 2, 3, 0, 0),
+    mk("3c-33x30-parc", "3 Colunas - 33 x 30 - Parcelamento", "linha", 33, 30, 3, 2, 3, 0, 0, true),
+    mk("5c-25x15", "5 Colunas - 25 x 15", "linha", 25, 15, 5, 2, 3, 0, 0),
     mk("a4-96", "A4 - 31 x 17 (96 etiquetas)", "folha", 31, 17, 6, 0.8, 0.8, 10, 6.5)
   ];
 }
 
 function etqNorm(m) {
-  const base = { tipo: "etiqueta", larg: 30, alt: 30, cols: 1, gapH: 0, gapV: 0, ml: 0, mt: 0, borda: false };
+  const base = { tipo: "etiqueta", larg: 30, alt: 30, cols: 1, gapH: 0, gapV: 0, ml: 0, mt: 0, borda: false, largPapel: 0, centralizar: true, offX: 0, offY: 0 };
   m.papel = Object.assign(base, m.papel || {});
   m.elementos = (m.elementos || []).map(e => etqEl(e.tipo || "texto", e));
   return m;
 }
+const ETQ_VER_KEY = "pec_etq_ver", ETQ_VER = 2;
 function etqLoad() {
   let m = load(ETQ_KEY, null);
-  if (!Array.isArray(m) || !m.length) { m = etqPadroes(); save(ETQ_KEY, m); }
+  if (!Array.isArray(m) || !m.length) { m = etqPadroes(); save(ETQ_KEY, m); save(ETQ_VER_KEY, ETQ_VER); }
+  else if (load(ETQ_VER_KEY, 1) < ETQ_VER) {
+    // Migração v2 (vão entre etiquetas + largura do papel): os modelos padrão antigos recebem a nova
+    // geometria de rolo, mantendo o que você editou (campos, tamanho, colunas). Modelos próprios ficam como estão.
+    const pad = etqPadroes();
+    const antigos = {}; m.forEach(x => { antigos[x.id] = x; });
+    const ids = pad.map(x => x.id);
+    m = pad.map(pd => {
+      const o = antigos[pd.id];
+      if (!o) return pd;
+      const op = o.papel || {};
+      const papel = Object.assign({}, pd.papel, op, { centralizar: true, offX: 0, offY: 0 });
+      if (op.tipo !== "folha") { papel.gapV = pd.papel.gapV; papel.largPapel = pd.papel.largPapel; }
+      return Object.assign({}, pd, { nome: o.nome || pd.nome, papel: papel, elementos: o.elementos && o.elementos.length ? o.elementos : pd.elementos });
+    }).concat(m.filter(x => ids.indexOf(x.id) < 0));
+    save(ETQ_KEY, m); save(ETQ_VER_KEY, ETQ_VER);
+  }
   return m.map(etqNorm);
 }
 function etqSaveAll(list) { save(ETQ_KEY, list); }
 function etqOpts() {
   return Object.assign({ modeloId: "elgin-1col", qtdModo: "um", qtdN: 1, parcelado: false, parcelas: 1, juro: 0, inicio: 1 }, load(ETQ_OPT_KEY, {}));
 }
+const etqR2 = v => Math.round(v * 100) / 100;
+// Geometria real da página de impressão (rolo: papel = largura total; altura = etiqueta + vão)
+function etqGeom(p) {
+  const W = +p.larg || 1, H = +p.alt || 1, cols = Math.max(1, parseInt(p.cols) || 1);
+  if (p.tipo === "folha") return { folha: true, cols: cols, conteudoW: cols * W + (cols - 1) * (+p.gapH || 0), paperW: 210, pageH: 297, x0: 0, y0: 0, gV: +p.gapV || 0 };
+  const gH = +p.gapH || 0, gV = +p.gapV || 0;
+  const conteudoW = p.tipo === "linha" ? cols * W + (cols - 1) * gH : W;
+  const paperW = Math.max(conteudoW, +p.largPapel || 0);
+  const x0 = (p.centralizar !== false ? (paperW - conteudoW) / 2 : (+p.ml || 0)) + (+p.offX || 0);
+  return { folha: false, cols: p.tipo === "linha" ? cols : 1, conteudoW: etqR2(conteudoW), paperW: etqR2(paperW), pageH: etqR2(H + gV), x0: etqR2(x0), y0: etqR2(+p.offY || 0), gV: gV, gH: gH };
+}
+function etqAvisoPapel(p) {
+  if (p.tipo === "folha") return "";
+  const g = etqGeom(p);
+  if (g.paperW > ETQ_LIM_MAX) return "⚠ Papel de " + g.paperW + " mm passa do máximo da Elgin (" + ETQ_LIM_MAX + " mm). Reduza colunas ou espaços.";
+  if (g.paperW < ETQ_LIM_MIN) return "⚠ Papel de " + g.paperW + " mm está abaixo do mínimo da Elgin (" + ETQ_LIM_MIN + " mm). Em “Largura do papel” use " + ETQ_LIM_MIN + " (fica centralizado).";
+  return "";
+}
 function etqResumo(m) {
   const p = m.papel;
   if (p.tipo === "folha") return "Folha A4 · " + p.cols + " col. · " + p.larg + " × " + p.alt + " mm";
-  if (p.tipo === "linha") return "Rolo · " + p.cols + " col. · " + p.larg + " × " + p.alt + " mm";
-  return "Rolo · " + p.larg + " × " + p.alt + " mm";
+  const g = etqGeom(p);
+  return "Rolo · " + (p.tipo === "linha" ? p.cols + " col. · " : "") + p.larg + " × " + p.alt + " mm · papel " + g.paperW + " mm";
 }
 
 // ── Dados do produto → texto ────────────────────────────────────────────────
@@ -760,25 +802,43 @@ function etqLabelHTML(tpl, item, opts, vazia) {
 
 // ── Monta o documento de impressão conforme o tipo de papel ─────────────────
 function etqDocumento(tpl, labels) {
-  const p = tpl.papel, W = p.larg, H = p.alt, cols = Math.max(1, parseInt(p.cols) || 1);
+  const p = tpl.papel, W = p.larg, H = p.alt, g = etqGeom(p), cols = g.cols;
   let css = "*{margin:0;padding:0;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}html,body{background:#fff}" +
     ".label{position:relative;overflow:hidden;flex:none;" + (p.borda ? "outline:0.2mm dashed #888;outline-offset:-0.2mm;" : "") + "}.pg:last-child{page-break-after:auto!important}";
   let body = "", pageW = W, pageH = H, modo = "etiqueta";
-  if (p.tipo === "linha") {
-    pageW = cols * W + (cols - 1) * p.gapH;
-    css += "@page{size:" + pageW + "mm " + H + "mm;margin:0}.pg{width:" + pageW + "mm;height:" + H + "mm;display:flex;gap:" + p.gapH + "mm;page-break-after:always;overflow:hidden}";
-    for (let i = 0; i < labels.length; i += cols) body += "<div class='pg'>" + labels.slice(i, i + cols).join("") + "</div>";
-  } else if (p.tipo === "folha") {
+  if (p.tipo === "folha") {
     pageW = 210; pageH = 297; modo = "a4";
-    const rows = Math.max(1, Math.floor((297 - p.mt + p.gapV) / (H + p.gapV)));
+    const gapV = +p.gapV || 0, gapH = +p.gapH || 0;
+    const rows = Math.max(1, Math.floor((297 - p.mt + gapV) / (H + gapV)));
     const por = cols * rows;
-    css += "@page{size:210mm 297mm;margin:0}.pg{width:210mm;height:297mm;padding:" + p.mt + "mm 0 0 " + p.ml + "mm;display:grid;grid-template-columns:repeat(" + cols + "," + W + "mm);grid-auto-rows:" + H + "mm;column-gap:" + p.gapH + "mm;row-gap:" + p.gapV + "mm;align-content:start;justify-content:start;page-break-after:always;overflow:hidden}";
+    css += "@page{size:210mm 297mm;margin:0}.pg{width:210mm;height:297mm;padding:" + p.mt + "mm 0 0 " + p.ml + "mm;display:grid;grid-template-columns:repeat(" + cols + "," + W + "mm);grid-auto-rows:" + H + "mm;column-gap:" + gapH + "mm;row-gap:" + gapV + "mm;align-content:start;justify-content:start;page-break-after:always;overflow:hidden}";
     for (let i = 0; i < labels.length; i += por) body += "<div class='pg'>" + labels.slice(i, i + por).join("") + "</div>";
   } else {
-    css += "@page{size:" + W + "mm " + H + "mm;margin:0}.pg{width:" + W + "mm;height:" + H + "mm;page-break-after:always;overflow:hidden}";
-    body = labels.map(l => "<div class='pg'>" + l + "</div>").join("");
+    // Rolo: cada página = 1 passo do rolo (etiqueta + vão). A linha de etiquetas é posicionada
+    // na largura do papel (centralizada ou pela margem) com ajustes finos X/Y.
+    pageW = g.paperW; pageH = g.pageH;
+    css += "@page{size:" + pageW + "mm " + pageH + "mm;margin:0}.pg{position:relative;width:" + pageW + "mm;height:" + pageH + "mm;page-break-after:always;overflow:hidden}" +
+      ".row{position:absolute;left:" + g.x0 + "mm;top:" + g.y0 + "mm;display:flex;gap:" + (g.gH || 0) + "mm}";
+    for (let i = 0; i < labels.length; i += cols) body += "<div class='pg'><div class='row'>" + labels.slice(i, i + cols).join("") + "</div></div>";
   }
   return { html: "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Etiquetas</title><style>" + css + "</style></head><body>" + body + "</body></html>", pageW: pageW, pageH: pageH, modo: modo };
+}
+
+// Teste de alinhamento: contorno + cruz + medidas em cada etiqueta (3 passos do rolo)
+function etqImprimirTeste(tpl) {
+  const t = etqClone(tpl), p = t.papel, g = etqGeom(p);
+  p.borda = true;
+  const W = p.larg, H = p.alt;
+  t.elementos = [
+    etqEl("linha", { x: 0, y: etqR1(H / 2 - 0.1), w: W, h: 0.2 }),
+    etqEl("linha", { x: etqR1(W / 2 - 0.1), y: 0, w: 0.2, h: H }),
+    etqEl("texto", { texto: W + " × " + H + " mm", x: 1, y: 1, w: W - 2, h: 4, pt: 6, negrito: true, alinha: "left", ajustar: true }),
+    etqEl("texto", { texto: "papel " + g.paperW + " · vão " + (g.gV || 0), x: 1, y: etqR1(H - 5), w: W - 2, h: 4, pt: 5, alinha: "left", ajustar: true })
+  ];
+  const n = (p.tipo === "folha" ? p.cols * 3 : g.cols * 3);
+  const labs = []; for (let i = 0; i < n; i++) labs.push(etqLabelHTML(t, ETQ_SAMPLE, {}));
+  const d = etqDocumento(t, labs);
+  printHTMLDoc(d.html, "Teste de alinhamento", d.modo, d.modo === "a4" ? null : d.pageW, d.modo === "a4" ? null : d.pageH);
 }
 
 function etqImprimirModelo(tpl, itens, opts) {
@@ -939,7 +999,16 @@ function EtqDesigner(p) {
       pp.tipo !== "etiqueta" ? grid2(etqH(EtqNum, { label: "Colunas", value: pp.cols, min: 1, step: 1, onChange: v => setPapel({ cols: Math.max(1, Math.round(v)) }) }), etqH(EtqNum, { label: "Espaço entre colunas (mm)", value: pp.gapH, min: 0, onChange: v => setPapel({ gapH: Math.max(0, v) }) })) : null,
       pp.tipo === "folha" ? grid2(etqH(EtqNum, { label: "Espaço entre linhas (mm)", value: pp.gapV, min: 0, onChange: v => setPapel({ gapV: Math.max(0, v) }) }), etqH("div")) : null,
       pp.tipo === "folha" ? grid2(etqH(EtqNum, { label: "Margem esquerda (mm)", value: pp.ml, min: 0, onChange: v => setPapel({ ml: Math.max(0, v) }) }), etqH(EtqNum, { label: "Margem superior (mm)", value: pp.mt, min: 0, onChange: v => setPapel({ mt: Math.max(0, v) }) })) : null,
-      chk("Imprimir contorno tracejado (para testes de alinhamento)", pp.borda, v => setPapel({ borda: v })),
+      pp.tipo !== "folha" ? etqH("div", { style: { border: "1px solid var(--border-default)", borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 8 } },
+        etqH("div", { style: { fontSize: 12, fontWeight: 700, color: "#E8682A" } }, "Rolo da impressora"),
+        grid2(etqH(EtqNum, { label: "Largura do papel (mm) — 0 = automática", value: pp.largPapel || 0, min: 0, step: 1, onChange: v => setPapel({ largPapel: Math.max(0, v) }) }), etqH(EtqNum, { label: "Vão entre etiquetas (mm)", value: pp.gapV || 0, min: 0, onChange: v => setPapel({ gapV: Math.max(0, v) }) })),
+        chk("Centralizar as etiquetas na largura do papel", pp.centralizar !== false, v => setPapel({ centralizar: v })),
+        pp.centralizar === false ? etqH(EtqNum, { label: "Margem esquerda (mm)", value: pp.ml || 0, min: 0, onChange: v => setPapel({ ml: Math.max(0, v) }) }) : null,
+        grid2(etqH(EtqNum, { label: "Ajuste horizontal (mm)", value: pp.offX || 0, onChange: v => setPapel({ offX: v }) }), etqH(EtqNum, { label: "Ajuste vertical (mm)", value: pp.offY || 0, onChange: v => setPapel({ offY: v }) })),
+        etqH("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5 } }, "Cada página enviada à impressora tem " + etqGeom(pp).paperW + " × " + etqGeom(pp).pageH + " mm (etiqueta + vão). A Elgin L42 Pro aceita papel de " + ETQ_LIM_MIN + " a " + ETQ_LIM_MAX + " mm."),
+        etqAvisoPapel(pp) ? etqH("div", { style: { fontSize: 12, color: "#F07030" } }, etqAvisoPapel(pp)) : null,
+        etqH("button", { style: ETQ_UI.btn(), onClick: () => etqImprimirTeste(d) }, "📏 Teste de alinhamento")) : null,
+      chk("Imprimir contorno tracejado em todas as etiquetas", pp.borda, v => setPapel({ borda: v })),
       etqH("button", { style: ETQ_UI.btn("ghost"), onClick: () => setConfAuto(true) }, "↻ Reorganizar campos automaticamente"),
       etqH("div", { style: { fontSize: 11, color: "var(--text-secondary)" } }, "Dica: ao mudar o tamanho da etiqueta, arraste os campos ou use “Reorganizar” para ajustar o layout ao novo tamanho."));
   } else if (!el) {
@@ -1051,6 +1120,7 @@ function EtqOpcoes() {
       etqH("select", { style: Object.assign({}, ETQ_UI.inp, { flex: 1, minWidth: 0 }), value: tpl.id, onChange: e => upd({ modeloId: e.target.value }) }, modelos.map(m => etqH("option", { key: m.id, value: m.id }, m.nome))),
       etqH("button", { style: ETQ_UI.btn(), onClick: () => setGer(true) }, "⚙ Configurar")),
     etqH("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 4 } }, etqResumo(tpl)),
+    etqAvisoPapel(tpl.papel) ? etqH("div", { style: { fontSize: 11, color: "#F07030", marginTop: 4 } }, etqAvisoPapel(tpl.papel)) : null,
     etqH("div", { style: { fontSize: 12, color: "var(--text-secondary)", margin: "14px 0 4px" } }, "Quantidade"),
     radio("um", "1 etiqueta para cada produto"),
     radio("n", "", [mini(o.qtdN, v => upd({ qtdN: v }), o.qtdModo !== "n"), "para cada produto"]),
@@ -1156,10 +1226,31 @@ const retryTombstones = async () => {
 // ── SUPABASE DIRETO ──────────────────────────────────────────────────────────
 const SUPABASE_URL = localStorage.getItem('_sb_url') || "https://jyrugkklsacswgysjser.supabase.co";
 const _SB_KEY = () => localStorage.getItem('_sb_key') || sessionStorage.getItem('_sb_key') || "";
+// Chaves JWT (eyJ...) vão também em Authorization. Chaves novas (sb_publishable_/sb_secret_) NÃO são JWT:
+// a documentação do Supabase manda enviá-las só no cabeçalho apikey.
+const _sbAuthH = k => /^eyJ/.test(String(k || "")) ? { Authorization: "Bearer " + k } : {};
+// Traduz a resposta de erro do Supabase em algo que o usuário entende
+function _sbExplicaErro(status, corpo) {
+  let det = String(corpo || "").trim(), code = "";
+  try { const j = JSON.parse(det); det = j.message || j.msg || j.error_description || j.error || det; code = j.code || ""; } catch (e) {}
+  det = String(det);
+  let dica = "";
+  if (status === 404 || code === "PGRST202" || /Could not find the function/i.test(det)) dica = "O banco ainda não tem a função get_all_data (projeto novo, sem as tabelas do PDV).";
+  else if (status === 401 || /JWT|api ?key/i.test(det)) dica = "Chave recusada. Use a chave anon (eyJ…) ou a publishable (sb_publishable_…) DESTE projeto.";
+  else if (status === 403 || code === "42501" || /permission denied/i.test(det)) dica = "Sem permissão: libere a função e as tabelas para a role anon (GRANT).";
+  else if (status >= 500) dica = "Servidor do Supabase com problema ou projeto pausado. No painel, clique em Restore project.";
+  return "HTTP " + status + (code ? " [" + code + "]" : "") + ": " + det.slice(0, 140) + (dica ? " — " + dica : "");
+}
+function _sbExplicaFalha(e) {
+  const nome = e && e.name, msg = (e && e.message) || String(e);
+  if (nome === "TimeoutError" || nome === "AbortError") return "Tempo esgotado sem resposta do servidor. Verifique a internet/firewall ou se o projeto está pausado.";
+  if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) return "Não foi possível alcançar o servidor (" + msg + "). Verifique a internet, o firewall/antivírus e a URL.";
+  return msg;
+}
 const _SB_H = () => ({
   'Content-Type': 'application/json',
   'apikey': _SB_KEY(),
-  'Authorization': 'Bearer ' + _SB_KEY(),
+  ..._sbAuthH(_SB_KEY()),
   'Prefer': 'return=representation'
 });
 
@@ -1337,7 +1428,7 @@ const migratePhotosToStorage = async (products, onProgress) => {
         method: 'POST',
         headers: {
           'apikey': key,
-          'Authorization': 'Bearer ' + key,
+          ..._sbAuthH(key),
           'Content-Type': 'image/jpeg',
           'x-upsert': 'true'
         },
@@ -2705,7 +2796,7 @@ function ProductSheet(_ref9) {
           method: 'POST',
           headers: {
             'apikey': key,
-            'Authorization': 'Bearer ' + key,
+            ..._sbAuthH(key),
             'Content-Type': 'image/jpeg',
             'x-upsert': 'true'
           },
@@ -3752,7 +3843,7 @@ const saveUsers = v => {
     headers: {
       "Content-Type": "application/json",
       "apikey": key,
-      "Authorization": "Bearer " + key,
+      ..._sbAuthH(key),
       "Prefer": "resolution=merge-duplicates"
     },
     body: JSON.stringify(rows)
@@ -3765,7 +3856,7 @@ const loadUsersFromSupabase = async () => {
     const r = await fetch(SUPABASE_URL + "/rest/v1/users?select=*&active=eq.true", {
       headers: {
         "apikey": key,
-        "Authorization": "Bearer " + key
+        ..._sbAuthH(key)
       }
     });
     if (!r.ok) return null;
@@ -3827,7 +3918,7 @@ function KeySetupScreen(_ref1) {
         headers: {
           'Content-Type': 'application/json',
           'apikey': key.trim(),
-          'Authorization': 'Bearer ' + key.trim()
+          ..._sbAuthH(key.trim())
         },
         body: '{}',
         signal: _timeoutSignal(8000)
@@ -3840,10 +3931,10 @@ function KeySetupScreen(_ref1) {
         setTimeout(() => window.location.reload(), 1000);
       } else {
         const e = await r.text();
-        setMsg("❌ Erro: " + e.slice(0, 120));
+        setMsg("❌ Erro " + _sbExplicaErro(r.status, e));
       }
     } catch (e) {
-      setMsg("❌ " + e.message);
+      setMsg("❌ " + _sbExplicaFalha(e));
     }
     setTesting(false);
   };
@@ -12325,7 +12416,7 @@ function BackupList(_ref27) {
     fetch(SUPABASE_URL + '/rest/v1/backups?select=id,tag,size_bytes,created_at&order=created_at.desc&limit=30', {
       headers: {
         'apikey': key,
-        'Authorization': 'Bearer ' + key
+        ..._sbAuthH(key)
       }
     }).then(r => r.ok ? r.json() : []).then(d => setBackups(d || [])).catch(() => setBackups([]));
   }, []);
@@ -16475,7 +16566,7 @@ function PDVApp() {
           headers: {
             'Content-Type': 'application/json',
             'apikey': key,
-            'Authorization': 'Bearer ' + key,
+            ..._sbAuthH(key),
             'Prefer': 'return=representation'
           },
           body: JSON.stringify([{
