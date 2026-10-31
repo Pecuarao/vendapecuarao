@@ -672,6 +672,17 @@ function etqAvisoPapel(p) {
   if (g.paperW < ETQ_LIM_MIN) return "⚠ Papel de " + g.paperW + " mm está abaixo do mínimo da Elgin (" + ETQ_LIM_MIN + " mm). Em “Largura do papel” use " + ETQ_LIM_MIN + " (fica centralizado).";
   return "";
 }
+// Firefox não usa o tamanho de papel (@page) em impressoras de etiqueta/cupom: usa a folha do driver
+function etqAvisoNavegador() {
+  const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
+  if (/Firefox\//.test(ua) && !/Seamonkey/i.test(ua)) return "⚠ Você está no Firefox. Em impressoras de etiqueta ele ignora o tamanho do papel do modelo e usa a folha do driver (ex.: 80 mm), gerando largura errada e etiquetas em branco. Abra o sistema no Google Chrome ou Microsoft Edge (ou use o app para Windows).";
+  return "";
+}
+function etqDicaImpressao(p) {
+  if (p.tipo === "folha") return "Na janela de impressão: papel A4 · margens: nenhuma · escala 100%.";
+  const g = etqGeom(p);
+  return "Na janela de impressão: papel " + g.paperW + " × " + g.pageH + " mm · margens: nenhuma · escala 100% · sem cabeçalho e rodapé.";
+}
 function etqResumo(m) {
   const p = m.papel;
   if (p.tipo === "folha") return "Folha A4 · " + p.cols + " col. · " + p.larg + " × " + p.alt + " mm";
@@ -804,20 +815,20 @@ function etqLabelHTML(tpl, item, opts, vazia) {
 function etqDocumento(tpl, labels) {
   const p = tpl.papel, W = p.larg, H = p.alt, g = etqGeom(p), cols = g.cols;
   let css = "*{margin:0;padding:0;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}html,body{background:#fff}" +
-    ".label{position:relative;overflow:hidden;flex:none;" + (p.borda ? "outline:0.2mm dashed #888;outline-offset:-0.2mm;" : "") + "}.pg:last-child{page-break-after:auto!important}";
+    ".label{position:relative;overflow:hidden;flex:none;" + (p.borda ? "outline:0.2mm dashed #888;outline-offset:-0.2mm;" : "") + "}.pg:last-child{page-break-after:auto!important;break-after:auto!important}html,body{margin:0;padding:0}";
   let body = "", pageW = W, pageH = H, modo = "etiqueta";
   if (p.tipo === "folha") {
     pageW = 210; pageH = 297; modo = "a4";
     const gapV = +p.gapV || 0, gapH = +p.gapH || 0;
     const rows = Math.max(1, Math.floor((297 - p.mt + gapV) / (H + gapV)));
     const por = cols * rows;
-    css += "@page{size:210mm 297mm;margin:0}.pg{width:210mm;height:297mm;padding:" + p.mt + "mm 0 0 " + p.ml + "mm;display:grid;grid-template-columns:repeat(" + cols + "," + W + "mm);grid-auto-rows:" + H + "mm;column-gap:" + gapH + "mm;row-gap:" + gapV + "mm;align-content:start;justify-content:start;page-break-after:always;overflow:hidden}";
+    css += "@page{size:210mm 297mm;margin:0}.pg{width:210mm;height:296.4mm;break-after:page;padding:" + p.mt + "mm 0 0 " + p.ml + "mm;display:grid;grid-template-columns:repeat(" + cols + "," + W + "mm);grid-auto-rows:" + H + "mm;column-gap:" + gapH + "mm;row-gap:" + gapV + "mm;align-content:start;justify-content:start;page-break-after:always;overflow:hidden}";
     for (let i = 0; i < labels.length; i += por) body += "<div class='pg'>" + labels.slice(i, i + por).join("") + "</div>";
   } else {
     // Rolo: cada página = 1 passo do rolo (etiqueta + vão). A linha de etiquetas é posicionada
     // na largura do papel (centralizada ou pela margem) com ajustes finos X/Y.
     pageW = g.paperW; pageH = g.pageH;
-    css += "@page{size:" + pageW + "mm " + pageH + "mm;margin:0}.pg{position:relative;width:" + pageW + "mm;height:" + pageH + "mm;page-break-after:always;overflow:hidden}" +
+    css += "@page{size:" + pageW + "mm " + pageH + "mm;margin:0}.pg{position:relative;width:" + pageW + "mm;height:" + etqR2(pageH - 0.4) + "mm;page-break-after:always;break-after:page;overflow:hidden}" +
       ".row{position:absolute;left:" + g.x0 + "mm;top:" + g.y0 + "mm;display:flex;gap:" + (g.gH || 0) + "mm}";
     for (let i = 0; i < labels.length; i += cols) body += "<div class='pg'><div class='row'>" + labels.slice(i, i + cols).join("") + "</div></div>";
   }
@@ -838,6 +849,16 @@ function etqImprimirTeste(tpl) {
   const n = (p.tipo === "folha" ? p.cols * 3 : g.cols * 3);
   const labs = []; for (let i = 0; i < n; i++) labs.push(etqLabelHTML(t, ETQ_SAMPLE, {}));
   const d = etqDocumento(t, labs);
+  if (p.tipo !== "folha") {
+    // régua em mm + contorno do papel: mostra onde o papel termina e se o navegador/driver encolheu a página
+    let regua = "<div style='position:absolute;left:0;bottom:0;width:" + g.paperW + "mm;height:3mm'>";
+    for (let x = 0; x <= g.paperW; x += 5) {
+      regua += "<div style='position:absolute;left:" + x + "mm;bottom:0;width:0.2mm;height:" + (x % 10 === 0 ? 3 : 1.5) + "mm;background:#000'></div>";
+      if (x % 10 === 0) regua += "<div style='position:absolute;left:" + (x + 0.4) + "mm;bottom:0.1mm;font-size:4pt;line-height:1;color:#000'>" + x + "</div>";
+    }
+    regua += "</div>";
+    d.html = d.html.replace(/<div class='pg'>/g, "<div class='pg' style='outline:0.3mm solid #000;outline-offset:-0.3mm'>" + regua);
+  }
   printHTMLDoc(d.html, "Teste de alinhamento", d.modo, d.modo === "a4" ? null : d.pageW, d.modo === "a4" ? null : d.pageH);
 }
 
@@ -1007,6 +1028,7 @@ function EtqDesigner(p) {
         grid2(etqH(EtqNum, { label: "Ajuste horizontal (mm)", value: pp.offX || 0, onChange: v => setPapel({ offX: v }) }), etqH(EtqNum, { label: "Ajuste vertical (mm)", value: pp.offY || 0, onChange: v => setPapel({ offY: v }) })),
         etqH("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5 } }, "Cada página enviada à impressora tem " + etqGeom(pp).paperW + " × " + etqGeom(pp).pageH + " mm (etiqueta + vão). A Elgin L42 Pro aceita papel de " + ETQ_LIM_MIN + " a " + ETQ_LIM_MAX + " mm."),
         etqAvisoPapel(pp) ? etqH("div", { style: { fontSize: 12, color: "#F07030" } }, etqAvisoPapel(pp)) : null,
+        etqAvisoNavegador() ? etqH("div", { style: { fontSize: 12, color: "#F07030", lineHeight: 1.4 } }, etqAvisoNavegador()) : null,
         etqH("button", { style: ETQ_UI.btn(), onClick: () => etqImprimirTeste(d) }, "📏 Teste de alinhamento")) : null,
       chk("Imprimir contorno tracejado em todas as etiquetas", pp.borda, v => setPapel({ borda: v })),
       etqH("button", { style: ETQ_UI.btn("ghost"), onClick: () => setConfAuto(true) }, "↻ Reorganizar campos automaticamente"),
@@ -1121,6 +1143,8 @@ function EtqOpcoes() {
       etqH("button", { style: ETQ_UI.btn(), onClick: () => setGer(true) }, "⚙ Configurar")),
     etqH("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 4 } }, etqResumo(tpl)),
     etqAvisoPapel(tpl.papel) ? etqH("div", { style: { fontSize: 11, color: "#F07030", marginTop: 4 } }, etqAvisoPapel(tpl.papel)) : null,
+    etqH("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 4 } }, etqDicaImpressao(tpl.papel)),
+    etqAvisoNavegador() ? etqH("div", { style: { fontSize: 12, color: "#F07030", marginTop: 6, lineHeight: 1.4 } }, etqAvisoNavegador()) : null,
     etqH("div", { style: { fontSize: 12, color: "var(--text-secondary)", margin: "14px 0 4px" } }, "Quantidade"),
     radio("um", "1 etiqueta para cada produto"),
     radio("n", "", [mini(o.qtdN, v => upd({ qtdN: v }), o.qtdModo !== "n"), "para cada produto"]),
