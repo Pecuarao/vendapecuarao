@@ -104,6 +104,17 @@ const _diceSim = (t1, t2) => {
 };
 // Todos os códigos de barras de um produto (principal + adicionais)
 const todosCodigosProd = p => [p.barcode, ...(Array.isArray(p.barcodesExtra) ? p.barcodesExtra : [])].map(c => String(c || "").trim()).filter(Boolean);
+// Normaliza GTIN (EAN-8, UPC-A 12, EAN-13, GTIN-14) para 14 dígitos: a câmera lê um
+// UPC-A como EAN-13 com "0" na frente, e o leitor USB pode mandar de qualquer jeito.
+const gtinNorm = c => {
+  const t = String(c || "").trim();
+  return /^\d{8}$|^\d{12,14}$/.test(t) ? t.padStart(14, "0") : t;
+};
+const codigoIgual = (a, b) => {
+  const x = gtinNorm(a), y = gtinNorm(b);
+  return !!x && x === y;
+};
+const prodTemCodigo = (p, code) => todosCodigosProd(p).some(c => codigoIgual(c, code));
 // Calcula score de 0 a 100 comparando um item importado (nfItem: {nome, barcode})
 // com um produto já cadastrado (prod: {name, barcode})
 const computeMatchScore = (nfItem, prod) => {
@@ -2360,6 +2371,13 @@ function ScannerBase(_ref8) {
   const rafRef = useRef(null);
   const activeRef = useRef(false);
   const scannerDivRef = useRef(null);
+  const quaggaRef = useRef(null);
+  const handlerRef = useRef(null);
+  const lastReadRef = useRef({
+    code: "",
+    n: 0,
+    t: 0
+  });
   const stopAll = () => {
     var _detRef$current;
     activeRef.current = false;
@@ -2368,12 +2386,21 @@ function ScannerBase(_ref8) {
       streamRef.current.getTracks().forEach(t => t.stop());
       streamRef.current = null;
     }
+    // Remove o ouvinte de leitura (Quagga é global; sem isso eles se acumulam a cada abertura)
+    if (quaggaRef.current && handlerRef.current) {
+      try {
+        quaggaRef.current.offDetected(handlerRef.current);
+      } catch (_) {}
+      handlerRef.current = null;
+    }
     if ((_detRef$current = detRef.current) !== null && _detRef$current !== void 0 && _detRef$current._quagga) {
       try {
         detRef.current._quagga.stop();
       } catch (_) {}
     }
   };
+  // Se a tela do leitor sair de cena sem clicar em "Fechar", desliga a câmera.
+  useEffect(() => () => stopAll(), []);
   const startScan = async () => {
     if (activeRef.current) return;
     activeRef.current = true;
@@ -2407,6 +2434,7 @@ function ScannerBase(_ref8) {
     });
     try {
       const Quagga = await loadQuagga();
+      quaggaRef.current = Quagga;
       // Garante que o elemento de vídeo existe
       await new Promise(r => setTimeout(r, 300));
       if (!scannerDivRef.current) {
@@ -2453,16 +2481,33 @@ function ScannerBase(_ref8) {
           _quagga: Quagga
         };
       });
-      Quagga.onDetected(result => {
+      const onDetectedHandler = result => {
         var _result$codeResult;
         const code = result === null || result === void 0 || (_result$codeResult = result.codeResult) === null || _result$codeResult === void 0 ? void 0 : _result$codeResult.code;
-        if (code && activeRef.current) {
-          Quagga.stop();
-          stopAll();
-          beep();
-          onCode(code);
+        if (!code || !activeRef.current) return;
+        // Só aceita depois de 2 leituras iguais seguidas (até 1,5 s entre elas):
+        // uma leitura isolada da câmera às vezes sai errada e adicionaria o produto errado.
+        const agora = Date.now();
+        const lr = lastReadRef.current;
+        if (lr.code === code && agora - lr.t <= 1500) {
+          lr.n += 1;
+          lr.t = agora;
+        } else {
+          lastReadRef.current = {
+            code,
+            n: 1,
+            t: agora
+          };
+          return;
         }
-      });
+        if (lastReadRef.current.n < 2) return;
+        Quagga.stop();
+        stopAll();
+        beep();
+        onCode(code);
+      };
+      handlerRef.current = onDetectedHandler;
+      Quagga.onDetected(onDetectedHandler);
     } catch (e) {
       console.error("Scanner error:", e);
       setStatus("error");
@@ -7858,7 +7903,7 @@ function ListaComprasPage(_ref20) {
     receberQty = _useStateR8[0],
     setReceberQty = _useStateR8[1];
   // Busca produto pelo barcode (principal ou adicional)
-  const matchesBC = (p, code) => todosCodigosProd(p).includes(String(code || "").trim());
+  const matchesBC = (p, code) => prodTemCodigo(p, code);
   const findProdByBC = code => (products || []).find(p => matchesBC(p, code));
   // Etiquetas
   const _useStateE1 = useState([]),
@@ -17360,13 +17405,13 @@ function PDVApp() {
     onCode: code => {
       const c = code.trim();
       const bal = decodeBalancaBarcode(c);
-      if (bal) {
-        const p = products.find(x => x.pluBalanca && x.pluBalanca.trim() === bal.plu);
-        if (!p) {
-          notify("Produto da balança não encontrado (PLU " + bal.plu + ")", "warn");
-          setScannerOpen(false);
-          return;
-        }
+      // PLU comparado sem zeros à esquerda ("000123" == "123")
+      const pluNorm = v => String(v || "").trim().replace(/^0+/, "");
+      const pBal = bal ? products.find(x => x.pluBalanca && pluNorm(x.pluBalanca) === pluNorm(bal.plu)) : null;
+      // Se o código começa com o prefixo da balança mas o PLU não existe, segue como
+      // código de barras comum (pode ser um produto normal que começa com o mesmo dígito).
+      if (bal && pBal) {
+        const p = pBal;
         if (bal.tipo === "peso") {
           const pesoKg = bal.valor / 1000;
           setCart(cc => {
@@ -17400,7 +17445,7 @@ function PDVApp() {
         setScannerOpen(false);
         return;
       }
-      const p = products.find(x => (x.barcode && x.barcode.trim() === c) || (Array.isArray(x.barcodesExtra) && x.barcodesExtra.some(b => b.trim() === c)));
+      const p = products.find(x => prodTemCodigo(x, c));
       if (p) {
         addToCart(p);
         notify(p.name + " ✓", "info");
@@ -18378,9 +18423,12 @@ function PDVApp() {
     key: m
   }, m)))), /*#__PURE__*/React.createElement("div", {
     style: {
+      display: "grid",
+      gridTemplateColumns: "auto 1fr",
+      gap: 10,
       marginBottom: 10
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.lbl,
       marginBottom: 5
@@ -18389,7 +18437,7 @@ function PDVApp() {
     style: {
       ...S.input,
       width: "auto",
-      padding: "5px 8px",
+      padding: "8px 8px",
       fontSize: 12
     },
     value: editSaleForm.tipo,
@@ -18401,17 +18449,17 @@ function PDVApp() {
     value: "pdv"
   }, "🏪 Varejo"), /*#__PURE__*/React.createElement("option", {
     value: "atacado"
-  }, "📦 Atacado"))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginBottom: 10
-    }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, "📦 Atacado"))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       ...S.lbl,
       marginBottom: 5
     }
   }, "Vendedor (comiss\xE3o)"), /*#__PURE__*/React.createElement("select", {
-    style: S.input,
+    style: {
+      ...S.input,
+      padding: "8px 8px",
+      fontSize: 12
+    },
     value: editSaleForm.vendedor,
     onChange: e => setEditSaleForm(f => ({
       ...f,
@@ -18419,10 +18467,10 @@ function PDVApp() {
     }))
   }, /*#__PURE__*/React.createElement("option", {
     value: ""
-  }, "\u2014 Sem vendedor / sem comiss\xE3o \u2014"), (users || []).filter(u => u.comissao > 0).map(u => /*#__PURE__*/React.createElement("option", {
+  }, "\u2014 Sem vendedor \u2014"), (users || []).filter(u => u.comissao > 0).map(u => /*#__PURE__*/React.createElement("option", {
     key: u.id,
     value: u.name
-  }, u.name, " \xB7 ", u.comissao, "% base")))), /*#__PURE__*/React.createElement("div", {
+  }, u.name, " \xB7 ", u.comissao, "% base"))))), /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 14
     }
