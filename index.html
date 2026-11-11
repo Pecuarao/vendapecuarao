@@ -18385,47 +18385,22 @@ function PDVApp() {
       ...S.lbl,
       marginBottom: 5
     }
-  }, "Modalidade da venda"), /*#__PURE__*/React.createElement("div", {
+  }, "Modalidade"), /*#__PURE__*/React.createElement("select", {
     style: {
-      display: "flex",
-      gap: 8
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    onClick: () => setEditSaleForm(f => ({
+      ...S.input,
+      width: "auto",
+      padding: "5px 8px",
+      fontSize: 12
+    },
+    value: editSaleForm.tipo,
+    onChange: e => setEditSaleForm(f => ({
       ...f,
-      tipo: "pdv"
-    })),
-    style: {
-      flex: 1,
-      padding: "10px 8px",
-      borderRadius: 10,
-      fontFamily: "inherit",
-      fontSize: 13,
-      fontWeight: 700,
-      cursor: "pointer",
-      border: "1px solid " + (editSaleForm.tipo === "pdv" ? "#4A5BC4" : "var(--bg-elevated)"),
-      background: editSaleForm.tipo === "pdv" ? "#4A5BC422" : "var(--bg-app)",
-      color: editSaleForm.tipo === "pdv" ? "#4A5BC4" : "var(--text-secondary)"
-    }
-  }, "🏪 Varejo"), /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    onClick: () => setEditSaleForm(f => ({
-      ...f,
-      tipo: "atacado"
-    })),
-    style: {
-      flex: 1,
-      padding: "10px 8px",
-      borderRadius: 10,
-      fontFamily: "inherit",
-      fontSize: 13,
-      fontWeight: 700,
-      cursor: "pointer",
-      border: "1px solid " + (editSaleForm.tipo === "atacado" ? "#f59e0b" : "var(--bg-elevated)"),
-      background: editSaleForm.tipo === "atacado" ? "#f59e0b22" : "var(--bg-app)",
-      color: editSaleForm.tipo === "atacado" ? "#f59e0b" : "var(--text-secondary)"
-    }
+      tipo: e.target.value
+    }))
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "pdv"
+  }, "🏪 Varejo"), /*#__PURE__*/React.createElement("option", {
+    value: "atacado"
   }, "📦 Atacado"))), /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 10
