@@ -18297,7 +18297,9 @@ function PDVApp() {
         items: s.items.map(i => ({
           ...i
         })),
-        vendedor: s.vendedor || ""
+        vendedor: s.vendedor || "",
+        // Modalidade da venda: "atacado" ou "pdv" (varejo)
+        tipo: s.tipo === "atacado" ? "atacado" : "pdv"
       });
     },
     style: {
@@ -18375,6 +18377,56 @@ function PDVApp() {
   }, ["Dinheiro", "Cartão Débito", "Cartão Crédito", "Pix", "Vale Refeição", "A Prazo"].map(m => /*#__PURE__*/React.createElement("option", {
     key: m
   }, m)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.lbl,
+      marginBottom: 5
+    }
+  }, "Modalidade da venda"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setEditSaleForm(f => ({
+      ...f,
+      tipo: "pdv"
+    })),
+    style: {
+      flex: 1,
+      padding: "10px 8px",
+      borderRadius: 10,
+      fontFamily: "inherit",
+      fontSize: 13,
+      fontWeight: 700,
+      cursor: "pointer",
+      border: "1px solid " + (editSaleForm.tipo === "pdv" ? "#4A5BC4" : "var(--bg-elevated)"),
+      background: editSaleForm.tipo === "pdv" ? "#4A5BC422" : "var(--bg-app)",
+      color: editSaleForm.tipo === "pdv" ? "#4A5BC4" : "var(--text-secondary)"
+    }
+  }, "🏪 Varejo"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setEditSaleForm(f => ({
+      ...f,
+      tipo: "atacado"
+    })),
+    style: {
+      flex: 1,
+      padding: "10px 8px",
+      borderRadius: 10,
+      fontFamily: "inherit",
+      fontSize: 13,
+      fontWeight: 700,
+      cursor: "pointer",
+      border: "1px solid " + (editSaleForm.tipo === "atacado" ? "#f59e0b" : "var(--bg-elevated)"),
+      background: editSaleForm.tipo === "atacado" ? "#f59e0b22" : "var(--bg-app)",
+      color: editSaleForm.tipo === "atacado" ? "#f59e0b" : "var(--text-secondary)"
+    }
+  }, "📦 Atacado"))), /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 10
     }
@@ -18622,7 +18674,7 @@ function PDVApp() {
         items: editSaleForm.items,
         total: newTotal,
         vendedor: editSaleForm.vendedor || "",
-        tipo: editSaleForm.vendedor ? "atacado" : x.tipo,
+        tipo: editSaleForm.tipo === "atacado" ? "atacado" : "pdv",
         comissaoValor: comissaoCalc,
         comissaoPaga: editSaleForm.vendedor === x.vendedor ? x.comissaoPaga : false
       } : x));
@@ -18636,6 +18688,7 @@ function PDVApp() {
           itens: editSaleForm.items,
           total: newTotal,
           pagamento: editSaleForm.payment || p.pagamento,
+          tipo: editSaleForm.tipo === "atacado" ? "atacado" : "pdv",
           isPrazo: editSaleForm.payment === "A Prazo"
         } : p));
       }
