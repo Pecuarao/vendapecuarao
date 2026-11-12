@@ -13442,9 +13442,40 @@ function RelatoriosPage(_refRel) {
     const total = vendasAtacado.reduce((s, v) => s + (v.total || 0), 0);
     const qtd = vendasAtacado.length;
     const ticket = qtd > 0 ? total / qtd : 0;
-    let sobrepreco = 0;
+    // "Vendido a mais" agora é LÍQUIDO: o que foi vendido acima do preço de tabela menos o que
+    // foi vendido abaixo (itens com preço menor que a tabela). Desconto geral do pedido fica de fora.
+    let sobrepreco = 0; // saldo líquido (a mais − a menos)
+    let totalAMais = 0;
+    let totalAMenos = 0; // fica negativo
     const mapaProd = {};
     const mapaProdSobrepreco = {};
+    // Diferença de um item para o preço de tabela (positivo = a mais, negativo = a menos);
+    // null quando o produto não tem preço de atacado de referência
+    const difItem = i => {
+      const precoRef = i.precoTabela != null ? +i.precoTabela : precoAtacadoDe(i.name);
+      return precoRef != null ? {
+        precoRef,
+        dif: ((i.price || 0) - precoRef) * (i.qty || 0)
+      } : null;
+    };
+    // Resultado de uma venda: soma dos itens vendidos a mais e a menos (preço do item x tabela)
+    const resultadoVenda = s => {
+      let mais = 0,
+        menos = 0,
+        temRef = false;
+      (s.items || []).forEach(i => {
+        const d = difItem(i);
+        if (!d) return;
+        temRef = true;
+        if (d.dif > 0) mais += d.dif;else if (d.dif < 0) menos += d.dif;
+      });
+      return {
+        mais,
+        menos,
+        liquido: mais + menos,
+        temRef
+      };
+    };
     vendasAtacado.forEach(s => {
       (s.items || []).forEach(i => {
         const nome = i.name || "—";
@@ -13455,20 +13486,22 @@ function RelatoriosPage(_refRel) {
         };
         mapaProd[nome].qtd += i.qty || 0;
         mapaProd[nome].fat += (i.price || 0) * (i.qty || 0);
-        const precoRef = i.precoTabela != null ? +i.precoTabela : precoAtacadoDe(nome);
-        const dif = precoRef != null ? ((i.price || 0) - precoRef) * (i.qty || 0) : 0;
-        if (precoRef != null && dif > 0) {
-          sobrepreco += dif;
+        const d = difItem(i);
+        if (d && d.dif !== 0) {
           if (!mapaProdSobrepreco[nome]) mapaProdSobrepreco[nome] = {
             nome,
-            precoTabela: precoRef,
+            precoTabela: d.precoRef,
             qtd: 0,
             extra: 0
           };
           mapaProdSobrepreco[nome].qtd += i.qty || 0;
-          mapaProdSobrepreco[nome].extra += dif;
+          mapaProdSobrepreco[nome].extra += d.dif;
         }
       });
+      const r = resultadoVenda(s);
+      totalAMais += r.mais;
+      totalAMenos += r.menos;
+      sobrepreco += r.liquido;
     });
     const produtos = Object.values(mapaProd).sort((a, b) => b.fat - a.fat);
     const produtosSobrepreco = Object.values(mapaProdSobrepreco).map(p => ({
@@ -13486,22 +13519,13 @@ function RelatoriosPage(_refRel) {
       };
       mapaCli[nome].total += s.total || 0;
       mapaCli[nome].qtd += 1;
-      (s.items || []).forEach(i => {
-        const precoRef = i.precoTabela != null ? +i.precoTabela : precoAtacadoDe(i.name);
-        const dif = precoRef != null ? ((i.price || 0) - precoRef) * (i.qty || 0) : 0;
-        if (precoRef != null && dif > 0) mapaCli[nome].sobrepreco += dif;
-      });
+      mapaCli[nome].sobrepreco += resultadoVenda(s).liquido;
     });
     const clientes = Object.values(mapaCli).sort((a, b) => b.total - a.total);
-    const clientesSobrepreco = Object.values(mapaCli).filter(c => c.sobrepreco > 0.005).sort((a, b) => b.sobrepreco - a.sobrepreco);
-    // Lista por pedido/venda (estilo Histórico): o que comprou, valor do pedido e quanto foi a mais
+    const clientesSobrepreco = Object.values(mapaCli).filter(c => Math.abs(c.sobrepreco) > 0.005).sort((a, b) => b.sobrepreco - a.sobrepreco);
+    // Lista por pedido/venda (estilo Histórico): o que comprou, valor do pedido e saldo (a mais ou a menos)
     const vendasSobrepreco = vendasAtacado.map(s => {
-      let sobreprecoVenda = 0;
-      (s.items || []).forEach(i => {
-        const precoRef = i.precoTabela != null ? +i.precoTabela : precoAtacadoDe(i.name);
-        const dif = precoRef != null ? ((i.price || 0) - precoRef) * (i.qty || 0) : 0;
-        if (precoRef != null && dif > 0) sobreprecoVenda += dif;
-      });
+      const r = resultadoVenda(s);
       return {
         id: s.id,
         customer: s.customer || "Avulso",
@@ -13509,9 +13533,9 @@ function RelatoriosPage(_refRel) {
         time: s.time,
         items: s.items || [],
         total: s.total || 0,
-        sobreprecoVenda
+        sobreprecoVenda: r.liquido
       };
-    }).filter(v => v.sobreprecoVenda > 0.005).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    }).filter(v => Math.abs(v.sobreprecoVenda) > 0.005).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     return {
       total,
       qtd,
@@ -13519,6 +13543,8 @@ function RelatoriosPage(_refRel) {
       produtos,
       clientes,
       sobrepreco,
+      totalAMais,
+      totalAMenos,
       clientesSobrepreco,
       produtosSobrepreco,
       vendasSobrepreco
@@ -13761,7 +13787,7 @@ function RelatoriosPage(_refRel) {
       corpo = "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Forma</th><th " + th + " style='text-align:center'>Qtd</th><th " + th + " style='text-align:right'>Total</th></tr>" + relPagamento.map(p => "<tr><td " + td + ">" + p.forma + "</td><td " + tdC + ">" + p.qtd + "</td><td " + tdR + ">" + fmt(p.total) + "</td></tr>").join("") + "</table>";
     } else if (tipo === "atacadoMais") {
       titulo = "Vendido a Mais — Venda Atacado";
-      corpo = relAtacado.vendasSobrepreco.length === 0 ? "<p style='font-size:13px;color:#888'>Nenhuma venda de atacado acima do preço de tabela no período.</p>" : relAtacado.vendasSobrepreco.map(v => "<div style='padding:8px 0;border-bottom:1px solid #eee;font-size:12px'>" + "<b>" + v.customer + "</b> <span style='color:#888'>· " + v.date + " " + v.time + "</span><br>" + "<span style='color:#666'>" + v.items.map(it => (it.qty || 0) + "x " + it.name).join(", ") + "</span><br>" + "Valor do pedido: <b>" + fmt(v.total) + "</b> &nbsp;·&nbsp; A mais: <b style='color:#16a34a'>" + fmt(v.sobreprecoVenda) + "</b>" + "</div>").join("") + "<table style='width:100%;border-collapse:collapse;margin-top:14px;border-top:2px solid #333'><tr><td " + td + "><b>Total vendido a mais</b></td><td " + tdR + "><b>" + fmt(relAtacado.sobrepreco) + "</b></td></tr></table>";
+      corpo = relAtacado.vendasSobrepreco.length === 0 ? "<p style='font-size:13px;color:#888'>Nenhuma venda de atacado acima ou abaixo do preço de tabela no período.</p>" : relAtacado.vendasSobrepreco.map(v => "<div style='padding:8px 0;border-bottom:1px solid #eee;font-size:12px'>" + "<b>" + v.customer + "</b> <span style='color:#888'>· " + v.date + " " + v.time + "</span><br>" + "<span style='color:#666'>" + v.items.map(it => (it.qty || 0) + "x " + it.name).join(", ") + "</span><br>" + "Valor do pedido: <b>" + fmt(v.total) + "</b> &nbsp;·&nbsp; " + (v.sobreprecoVenda >= 0 ? "A mais: <b style='color:#16a34a'>" : "A menos: <b style='color:#dc2626'>") + fmt(Math.abs(v.sobreprecoVenda)) + "</b></div>").join("") + "<table style='width:100%;border-collapse:collapse;margin-top:14px;border-top:2px solid #333'><tr><td " + td + ">Vendido a mais</td><td " + tdR + " style='color:#16a34a'>" + fmt(relAtacado.totalAMais) + "</td></tr><tr><td " + td + ">Vendido a menos</td><td " + tdR + " style='color:#dc2626'>− " + fmt(Math.abs(relAtacado.totalAMenos)) + "</td></tr><tr><td " + td + "><b>Saldo líquido (a mais − a menos)</b></td><td " + tdR + "><b>" + (relAtacado.sobrepreco < 0 ? "− " : "") + fmt(Math.abs(relAtacado.sobrepreco)) + "</b></td></tr></table>";
     } else if (tipo === "atacado") {
       titulo = "Relatório de Atacado";
       corpo = "<table style='width:100%;border-collapse:collapse'>" + "<tr><td " + td + ">Total vendido</td><td " + tdR + "><b>" + fmt(relAtacado.total) + "</b></td></tr>" + "<tr><td " + td + ">Quantidade de vendas</td><td " + tdR + ">" + relAtacado.qtd + "</td></tr>" + "<tr><td " + td + ">Ticket médio</td><td " + tdR + ">" + fmt(relAtacado.ticket) + "</td></tr>" + "</table>" + "<h3 style='margin:18px 0 8px;font-size:14px'>Produtos mais vendidos</h3>" + "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Produto</th><th " + th + " style='text-align:center'>Qtd</th><th " + th + " style='text-align:right'>Faturamento</th></tr>" + relAtacado.produtos.map(p => "<tr><td " + td + ">" + p.nome + "</td><td " + tdC + ">" + p.qtd + "</td><td " + tdR + ">" + fmt(p.fat) + "</td></tr>").join("") + "</table>" + "<h3 style='margin:18px 0 8px;font-size:14px'>Clientes</h3>" + "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Cliente</th><th " + th + " style='text-align:center'>Compras</th><th " + th + " style='text-align:right'>Total</th></tr>" + relAtacado.clientes.map(c => "<tr><td " + td + ">" + c.nome + "</td><td " + tdC + ">" + c.qtd + "</td><td " + tdR + ">" + fmt(c.total) + "</td></tr>").join("") + "</table>";
@@ -14523,7 +14549,8 @@ function renderRelatorioConteudo(tipo, d) {
   }
   if (tipo === "atacadoMais") {
     const a = d.relAtacado;
-    if (a.vendasSobrepreco.length === 0) return vazio("Nenhuma venda de atacado acima do preço de tabela no período.");
+    if (a.vendasSobrepreco.length === 0) return vazio("Nenhuma venda de atacado acima ou abaixo do preço de tabela no período.");
+    const sinal = n => (n < 0 ? "− " : "") + fmt(Math.abs(n));
     return /*#__PURE__*/React.createElement("div", null, a.vendasSobrepreco.map((v, i) => /*#__PURE__*/React.createElement("div", {
       key: v.id || i,
       style: {
@@ -14555,16 +14582,16 @@ function renderRelatorioConteudo(tipo, d) {
     }, "Valor do pedido: ", /*#__PURE__*/React.createElement("b", null, fmt(v.total))), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 12,
-        color: "#4ade80",
+        color: v.sobreprecoVenda >= 0 ? "#4ade80" : "#f87171",
         fontWeight: 700
       }
-    }, "A mais: ", fmt(v.sobreprecoVenda)))), /*#__PURE__*/React.createElement("div", {
+    }, v.sobreprecoVenda >= 0 ? "A mais: " : "A menos: ", fmt(Math.abs(v.sobreprecoVenda))))), /*#__PURE__*/React.createElement("div", {
       style: {
         marginTop: 14,
         paddingTop: 10,
         borderTop: "2px solid var(--bg-elevated)"
       }
-    }, linha("Total vendido a mais", fmt(a.sobrepreco), "#4ade80")));
+    }, linha("Vendido a mais", fmt(a.totalAMais), "#4ade80"), linha("Vendido a menos", sinal(a.totalAMenos), "#f87171"), linha("Saldo líquido (a mais − a menos)", sinal(a.sobrepreco), a.sobrepreco >= 0 ? "#4ade80" : "#f87171")));
   }
   if (tipo === "entregas") {
     const e = d.relEntregas;
@@ -16283,15 +16310,47 @@ function PDVApp() {
       borderBottom: "1px solid var(--border-default)",
       marginBottom: 10
     }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10
+    }
   }, /*#__PURE__*/React.createElement("img", {
     src: LOGO_SRC,
     alt: "Pecuar\xE3o",
     style: {
       height: 30,
       objectFit: "contain",
-      maxWidth: 120
+      maxWidth: 96,
+      flexShrink: 0
     }
-  }), /*#__PURE__*/React.createElement("div", {
+  }), currentUser && /*#__PURE__*/React.createElement("div", {
+    title: "Logado como " + (currentUser.name || "") + (currentUser.role === "admin" ? " (Administrador)" : ""),
+    style: {
+      minWidth: 0,
+      flex: 1,
+      borderLeft: "1px solid var(--border-default)",
+      paddingLeft: 10,
+      lineHeight: 1.2
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 9,
+      textTransform: "uppercase",
+      letterSpacing: 1,
+      color: "var(--text-secondary)"
+    }
+  }, "Logado"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: "var(--text-primary)",
+      whiteSpace: "nowrap",
+      overflow: "hidden",
+      textOverflow: "ellipsis"
+    }
+  }, currentUser.name || ""))), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10,
       color: "#3a3d50",
