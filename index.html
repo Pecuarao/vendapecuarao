@@ -114,6 +114,9 @@ const codigoIgual = (a, b) => {
   const x = gtinNorm(a), y = gtinNorm(b);
   return !!x && x === y;
 };
+// Preço do produto conforme a modalidade da venda: varejo usa "price"; atacado usa "priceAtacado"
+// (se o produto não tiver preço de atacado cadastrado, cai para o de varejo, como no módulo Atacado).
+const precoPorModalidade = (p, tipo) => +((tipo === "atacado" ? p.priceAtacado || p.price : p.price) || 0);
 const prodTemCodigo = (p, code) => todosCodigosProd(p).some(c => codigoIgual(c, code));
 // Calcula score de 0 a 100 comparando um item importado (nfItem: {nome, barcode})
 // com um produto já cadastrado (prod: {name, barcode})
@@ -212,7 +215,8 @@ const carregarJsPDF = async () => {
 // por outros apps via Android Share e imprime na impressora Bluetooth já
 // pareada nele. Isso evita reimplementar toda a comunicação Bluetooth/ESC-POS
 // aqui dentro — o Thermer cuida disso.
-const enviarParaThermer = async (doc, fileName) => {
+const enviarParaThermer = async (doc, fileName, notify) => {
+  if (typeof notify !== "function") notify = msg => alert(msg);
   if (!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())) {
     notify("O envio direto para o Thermer só funciona dentro do app Android.", "warn");
     return;
@@ -544,14 +548,16 @@ const decodeBalancaBarcode = code => {
   };
 };
 
-const todayStr = () => new Date().toISOString().slice(0, 10);
+// Data local "yyyy-mm-dd" (toISOString usa UTC: no Brasil, depois das 21h já devolvia o dia seguinte)
+const ymdLocal = d => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+const todayStr = () => ymdLocal(new Date());
 const nowTime = () => new Date().toTimeString().slice(0, 5);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 // Soma N dias a uma data "yyyy-mm-dd" e devolve outra data "yyyy-mm-dd"
 const addDias = (dataStr, n) => {
   const dt = new Date((dataStr || todayStr()) + "T12:00");
   dt.setDate(dt.getDate() + n);
-  return dt.toISOString().slice(0, 10);
+  return ymdLocal(dt);
 };
 // Diferença em dias inteiros entre duas datas "yyyy-mm-dd" (a - b)
 const diffDias = (a, b) => {
@@ -4561,22 +4567,22 @@ function UsersPage(_ref11) {
       const d = new Date(hoje);
       d.setDate(d.getDate() - 7);
       return {
-        de: d.toISOString().slice(0, 10),
-        ate: hoje.toISOString().slice(0, 10)
+        de: ymdLocal(d),
+        ate: ymdLocal(hoje)
       };
     }
     if (periodo === "mes") {
       return {
         de: hoje.getFullYear() + "-" + String(hoje.getMonth() + 1).padStart(2, "0") + "-01",
-        ate: hoje.toISOString().slice(0, 10)
+        ate: ymdLocal(hoje)
       };
     }
     if (periodo === "mesant") {
       const d = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
       const d2 = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
       return {
-        de: d.toISOString().slice(0, 10),
-        ate: d2.toISOString().slice(0, 10)
+        de: ymdLocal(d),
+        ate: ymdLocal(d2)
       };
     }
     return {
@@ -11240,6 +11246,15 @@ function EntregasPage(_ref24) {
     _useStateEditPedBuscaB = _slicedToArray(_useStateEditPedBusca, 2),
     editPedAddBusca = _useStateEditPedBuscaB[0],
     setEditPedAddBusca = _useStateEditPedBuscaB[1];
+  // Modalidade do pedido em edição: a venda vinculada manda (é onde a modalidade é trocada);
+  // sem venda vinculada, vale o tipo do próprio pedido. O tipo do pedido pode vir vazio do servidor.
+  const pedEhAtacado = ped => {
+    if (!ped) return false;
+    const v = ped.vendaId ? (sales || []).find(s => s.id === ped.vendaId) : null;
+    return v ? v.tipo === "atacado" : ped.tipo === "atacado";
+  };
+  // Preço do produto conforme a modalidade (atacado cai para o varejo se não houver preço de atacado)
+  const precoDaModalidade = (p, atac) => precoPorModalidade(p, atac ? "atacado" : "pdv");
   const abrirEdicaoPedido = ped => {
     setEditPed(ped);
     setEditPedForm({
@@ -11538,7 +11553,7 @@ function EntregasPage(_ref24) {
     notify("Preparando pedido para o Thermer...", "info");
     try {
       const doc = await construirPdfPedido80mm(ped);
-      await enviarParaThermer(doc, "pedido-" + (ped.numero || "entrega") + ".pdf");
+      await enviarParaThermer(doc, "pedido-" + (ped.numero || "entrega") + ".pdf", notify);
     } catch (e) {
       console.error("Erro ao montar PDF do pedido para o Thermer:", e);
       notify("Erro ao preparar o pedido para o Thermer.", "error");
@@ -12370,7 +12385,7 @@ function EntregasPage(_ref24) {
           items: [...f.items, {
             name: p.name,
             qty: 1,
-            price: +((editPed && editPed.tipo === "atacado" ? p.priceAtacado || p.price : p.price) || 0),
+            price: precoDaModalidade(p, pedEhAtacado(editPed)),
             cost: +(p.costPrice || 0)
           }]
         };
@@ -12394,7 +12409,7 @@ function EntregasPage(_ref24) {
       color: "#E8682A",
       fontWeight: 700
     }
-  }, fmt(p.price)))), products.filter(p => p.name.toLowerCase().includes(editPedAddBusca.toLowerCase())).length === 0 && /*#__PURE__*/React.createElement("div", {
+  }, fmt(precoDaModalidade(p, pedEhAtacado(editPed)))))), products.filter(p => p.name.toLowerCase().includes(editPedAddBusca.toLowerCase())).length === 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       padding: "10px 12px",
       fontSize: 12,
@@ -15618,7 +15633,7 @@ function PDVApp() {
     notify("Preparando recibo para o Thermer...", "info");
     try {
       const doc = await construirPdfRecibo80mm(s);
-      await enviarParaThermer(doc, "recibo-" + s.id.slice(-8) + ".pdf");
+      await enviarParaThermer(doc, "recibo-" + s.id.slice(-8) + ".pdf", notify);
     } catch (e) {
       console.error("Erro ao montar PDF do recibo para o Thermer:", e);
       notify("Erro ao preparar o recibo para o Thermer.", "error");
@@ -18419,13 +18434,14 @@ function PDVApp() {
       ...f,
       payment: e.target.value
     }))
-  }, ["Dinheiro", "Cartão Débito", "Cartão Crédito", "Pix", "Vale Refeição", "A Prazo"].map(m => /*#__PURE__*/React.createElement("option", {
+  }, ["Dinheiro", "Cartão Débito", "Cartão Crédito", "Pix", "Vale Refeição", "A Prazo", "Boleto"].map(m => /*#__PURE__*/React.createElement("option", {
     key: m
   }, m)))), /*#__PURE__*/React.createElement("div", {
     style: {
-      display: "grid",
-      gridTemplateColumns: "auto 1fr",
+      display: "flex",
+      flexWrap: "wrap",
       gap: 10,
+      alignItems: "flex-end",
       marginBottom: 10
     }
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
@@ -18457,20 +18473,35 @@ function PDVApp() {
   }, "Vendedor (comiss\xE3o)"), /*#__PURE__*/React.createElement("select", {
     style: {
       ...S.input,
+      width: "auto",
+      maxWidth: "100%",
       padding: "8px 8px",
       fontSize: 12
     },
-    value: editSaleForm.vendedor,
+    value: editSaleForm.vendedor || "",
     onChange: e => setEditSaleForm(f => ({
       ...f,
       vendedor: e.target.value
     }))
   }, /*#__PURE__*/React.createElement("option", {
     value: ""
-  }, "\u2014 Sem vendedor \u2014"), (users || []).filter(u => u.comissao > 0).map(u => /*#__PURE__*/React.createElement("option", {
-    key: u.id,
-    value: u.name
-  }, u.name, " \xB7 ", u.comissao, "% base"))))), /*#__PURE__*/React.createElement("div", {
+  }, "\u2014 Sem vendedor \u2014"), (() => {
+    // Todos os usuários podem ser escolhidos (antes só apareciam os com comissão > 0 e,
+    // se o vendedor da venda não estivesse na lista, a tela mostrava "Sem vendedor"
+    // mas gravava o vendedor antigo; não dava para trocar nem remover).
+    const todos = (users || []).filter(u => u && u.name);
+    const atual = editSaleForm.vendedor || "";
+    const extra = atual && !todos.some(u => u.name === atual) ? [{
+      id: "__atual",
+      name: atual,
+      comissao: 0,
+      orfao: true
+    }] : [];
+    return [...extra, ...todos].map(u => /*#__PURE__*/React.createElement("option", {
+      key: u.id || u.name,
+      value: u.name
+    }, u.name, u.orfao ? " (atual)" : u.comissao > 0 ? " \xB7 " + u.comissao + "% base" : ""));
+  })()))), /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 14
     }
@@ -18625,7 +18656,11 @@ function PDVApp() {
           items: [...f.items, {
             name: p.name,
             qty: 1,
-            price: +(p.price || 0),
+            price: precoPorModalidade(p, f.tipo),
+            // no atacado o item guarda o preço de tabela (usado nos relatórios), igual ao módulo Atacado
+            ...(f.tipo === "atacado" ? {
+              precoTabela: +(p.priceAtacado || 0) || null
+            } : {}),
             cost: +(p.costPrice || 0)
           }]
         };
@@ -18649,7 +18684,7 @@ function PDVApp() {
       color: "#E8682A",
       fontWeight: 700
     }
-  }, fmt(p.price)))), products.filter(p => p.name.toLowerCase().includes(editSaleAddBusca.toLowerCase())).length === 0 && /*#__PURE__*/React.createElement("div", {
+  }, fmt(precoPorModalidade(p, editSaleForm.tipo))))), products.filter(p => p.name.toLowerCase().includes(editSaleAddBusca.toLowerCase())).length === 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       padding: "10px 12px",
       fontSize: 12,
@@ -18699,7 +18734,8 @@ function PDVApp() {
         vendedor: editSaleForm.vendedor || "",
         tipo: editSaleForm.tipo === "atacado" ? "atacado" : "pdv",
         comissaoValor: comissaoCalc,
-        comissaoPaga: editSaleForm.vendedor === x.vendedor ? x.comissaoPaga : false
+        comissaoPaga: (editSaleForm.vendedor || "") === (x.vendedor || "") ? !!x.comissaoPaga : false,
+        comissaoPagaEm: (editSaleForm.vendedor || "") === (x.vendedor || "") ? x.comissaoPagaEm || null : null
       } : x));
       // Se essa venda tiver uma entrega vinculada, atualiza também os dados
       // dela (cliente, itens, total e pagamento) para não ficar desatualizada.
