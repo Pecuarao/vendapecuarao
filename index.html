@@ -13376,6 +13376,33 @@ function RelatoriosPage(_refRel) {
     _rCliB = _slicedToArray(_rCli, 2),
     clienteFiltro = _rCliB[0],
     setClienteFiltro = _rCliB[1];
+  // Aba Produtos: produto aberto no detalhe, ordem do ranking e busca por nome
+  const _rProd = useState(null),
+    _rProdB = _slicedToArray(_rProd, 2),
+    produtoSel = _rProdB[0],
+    setProdutoSel = _rProdB[1];
+  const _rOrdP = useState("qtd"),
+    _rOrdPB = _slicedToArray(_rOrdP, 2),
+    ordemProd = _rOrdPB[0],
+    setOrdemProd = _rOrdPB[1];
+  const _rBuscaP = useState(""),
+    _rBuscaPB = _slicedToArray(_rBuscaP, 2),
+    buscaProd = _rBuscaPB[0],
+    setBuscaProd = _rBuscaPB[1];
+  // Aba Vendas e Pagamentos: forma de pagamento aberta no detalhe
+  const _rPag = useState(""),
+    _rPagB = _slicedToArray(_rPag, 2),
+    pagSel = _rPagB[0],
+    setPagSel = _rPagB[1];
+  // Aba Clientes: ordem e busca do ranking
+  const _rOrdC = useState("total"),
+    _rOrdCB = _slicedToArray(_rOrdC, 2),
+    ordemCli = _rOrdCB[0],
+    setOrdemCli = _rOrdCB[1];
+  const _rBuscaC = useState(""),
+    _rBuscaCB = _slicedToArray(_rBuscaC, 2),
+    buscaCli = _rBuscaCB[0],
+    setBuscaCli = _rBuscaCB[1];
 
   // Custo atual de um produto pelo nome (usado nos cálculos de lucro)
   const custoDe = nome => {
@@ -13573,32 +13600,6 @@ function RelatoriosPage(_refRel) {
     };
   })();
 
-  // ── COMISSÃO ── (por vendedor + geral)
-  const relComissao = (() => {
-    const porVendedor = {};
-    let geral = 0;
-    vendasPer.forEach(s => {
-      const v = s.comissaoValor || 0;
-      if (v <= 0) return;
-      const nome = s.vendedor || "Sem vendedor";
-      if (!porVendedor[nome]) porVendedor[nome] = {
-        nome,
-        total: 0,
-        qtd: 0,
-        pago: 0,
-        pendente: 0
-      };
-      porVendedor[nome].total += v;
-      porVendedor[nome].qtd += 1;
-      if (s.comissaoPaga) porVendedor[nome].pago += v;else porVendedor[nome].pendente += v;
-      geral += v;
-    });
-    return {
-      lista: Object.values(porVendedor).sort((a, b) => b.total - a.total),
-      geral
-    };
-  })();
-
   // ── CLIENTES ──
   const relClientes = (() => {
     const mapa = {};
@@ -13607,12 +13608,18 @@ function RelatoriosPage(_refRel) {
       if (!mapa[nome]) mapa[nome] = {
         nome,
         total: 0,
-        qtd: 0
+        qtd: 0,
+        ultima: ""
       };
       mapa[nome].total += s.total || 0;
       mapa[nome].qtd += 1;
+      const stamp = (s.date || "") + " " + (s.time || "");
+      if (stamp > mapa[nome].ultima) mapa[nome].ultima = stamp;
     });
-    return Object.values(mapa).sort((a, b) => b.total - a.total);
+    return Object.values(mapa).map(c => ({
+      ...c,
+      ticket: c.qtd > 0 ? c.total / c.qtd : 0
+    })).sort((a, b) => b.total - a.total);
   })();
 
   // Lista de nomes de clientes para o seletor (cadastrados + os que aparecem em vendas avulsas)
@@ -13622,30 +13629,94 @@ function RelatoriosPage(_refRel) {
     return Array.from(nomes).filter(Boolean).sort((a, b) => a.localeCompare(b, "pt-BR"));
   })();
 
-  // Detalhe do cliente selecionado: produtos comprados (agrupados) + total do período
+  // Detalhe do cliente selecionado (aba Clientes → toque no nome): compras do PERÍODO + dados do HISTÓRICO
+  // geral (última compra, tempo sem comprar, valores a prazo em aberto), que não dependem do período.
   const relClienteDetalhe = (() => {
     if (!clienteFiltro) return null;
-    const vendasCliente = vendasPer.filter(s => (s.customer || "Avulso") === clienteFiltro);
+    const ehAvulso = clienteFiltro === "Avulso";
+    const doCliente = lista => lista.filter(s => (s.customer || "Avulso") === clienteFiltro);
+    const vendasCliente = doCliente(vendasPer);
+    const historico = doCliente(sales || []);
+    const cad = ehAvulso ? null : (customers || []).find(c => c.name === clienteFiltro) || null;
+    const stampDe = s => (s.date || "") + " " + (s.time || "");
+    const maisRecentes = (lista, n) => [...lista].sort((x, y) => stampDe(y).localeCompare(stampDe(x))).slice(0, n);
     const produtosMap = {};
-    let total = 0;
+    const pagamentos = {};
+    const varejo = {
+      compras: 0,
+      total: 0
+    };
+    const atacado = {
+      compras: 0,
+      total: 0
+    };
+    let total = 0,
+      custo = 0,
+      valorItens = 0;
     vendasCliente.forEach(s => {
       total += s.total || 0;
+      const alvo = s.tipo === "atacado" ? atacado : varejo;
+      alvo.compras += 1;
+      alvo.total += s.total || 0;
+      const pg = s.payment || "Outro";
+      if (!pagamentos[pg]) pagamentos[pg] = {
+        forma: pg,
+        qtd: 0,
+        total: 0
+      };
+      pagamentos[pg].qtd += 1;
+      pagamentos[pg].total += s.total || 0;
       (s.items || []).forEach(i => {
         const nome = i.name || "Item";
+        const q = i.qty || 0;
+        const v = (i.price || 0) * q;
+        const c = i.cost != null && i.cost > 0 ? i.cost : custoDe(nome);
         if (!produtosMap[nome]) produtosMap[nome] = {
           nome,
           qtd: 0,
           subtotal: 0
         };
-        produtosMap[nome].qtd += i.qty || 0;
-        produtosMap[nome].subtotal += (i.price || 0) * (i.qty || 0);
+        produtosMap[nome].qtd += q;
+        produtosMap[nome].subtotal += v;
+        custo += c * q;
+        valorItens += v;
       });
     });
+    const produtos = Object.values(produtosMap).sort((a, b) => b.subtotal - a.subtotal);
+    const maisComprado = [...produtos].sort((a, b) => b.qtd - a.qtd)[0] || null;
+    const diasEntre = (d1, d2) => Math.round((new Date(d2 + "T12:00") - new Date(d1 + "T12:00")) / 86400000);
+    const ultima = maisRecentes(historico, 1)[0] || null;
+    const datas = Array.from(new Set(historico.map(s => s.date).filter(Boolean))).sort();
+    const abertas = historico.filter(s => s.payment === "A Prazo" && s.prazoPago !== true);
+    const lucro = valorItens - custo;
     return {
       cliente: clienteFiltro,
+      ehAvulso,
+      telefone: cad && cad.phone || "",
       qtdCompras: vendasCliente.length,
       total,
-      produtos: Object.values(produtosMap).sort((a, b) => b.subtotal - a.subtotal)
+      ticketMedio: vendasCliente.length > 0 ? total / vendasCliente.length : 0,
+      produtos,
+      maisComprado,
+      maisValor: produtos[0] || null,
+      lucro,
+      margem: valorItens > 0 ? lucro / valorItens * 100 : 0,
+      semCusto: vendasCliente.some(s => (s.items || []).some(i => !(i.cost > 0) && !(custoDe(i.name || "Item") > 0))),
+      varejo,
+      atacado,
+      pagamentos: Object.values(pagamentos).sort((a, b) => b.total - a.total),
+      recentes: maisRecentes(vendasCliente, 5),
+      // histórico geral (ignora o período)
+      historicoCompras: historico.length,
+      historicoTotal: historico.reduce((t, s) => t + (s.total || 0), 0),
+      primeiraCompra: datas[0] || "",
+      ultimaCompra: ultima ? stampDe(ultima) : "",
+      ultimaCompraValor: ultima ? ultima.total || 0 : 0,
+      ultimaCompraForma: ultima ? ultima.payment || "" : "",
+      diasSemComprar: ultima && ultima.date ? Math.max(0, diasEntre(ultima.date, todayStr())) : null,
+      intervaloMedio: !ehAvulso && datas.length >= 2 ? diasEntre(datas[0], datas[datas.length - 1]) / (datas.length - 1) : null,
+      aPrazoAberto: abertas.reduce((t, s) => t + (s.total || 0), 0),
+      aPrazoAbertoQtd: abertas.length
     };
   })();
 
@@ -13662,57 +13733,249 @@ function RelatoriosPage(_refRel) {
       mapa[pg].total += s.total || 0;
       mapa[pg].qtd += 1;
     });
-    return Object.values(mapa).sort((a, b) => b.total - a.total);
+    const totalGeral = vendasPer.reduce((t, s) => t + (s.total || 0), 0);
+    return Object.values(mapa).map(p => ({
+      ...p,
+      ticket: p.qtd > 0 ? p.total / p.qtd : 0,
+      pct: totalGeral > 0 ? p.total / totalGeral * 100 : 0
+    })).sort((a, b) => b.total - a.total);
   })();
 
-  // ── PRODUTOS: retorno no período (fat, qtd, lucro) ──
+  // Detalhe de UMA forma de pagamento no período (aba Vendas → toque na forma de pagamento)
+  const relPagamentoDetalhe = (() => {
+    if (!pagSel) return null;
+    const lista = vendasPer.filter(s => (s.payment || "Outro") === pagSel);
+    const stampDe = s => (s.date || "") + " " + (s.time || "");
+    const ordenada = [...lista].sort((x, y) => stampDe(y).localeCompare(stampDe(x)));
+    const total = lista.reduce((t, s) => t + (s.total || 0), 0);
+    const totalGeral = vendasPer.reduce((t, s) => t + (s.total || 0), 0);
+    const varejo = {
+      qtd: 0,
+      total: 0
+    };
+    const atacado = {
+      qtd: 0,
+      total: 0
+    };
+    const clientes = {};
+    const porDia = {};
+    let maior = null;
+    lista.forEach(s => {
+      const alvo = s.tipo === "atacado" ? atacado : varejo;
+      alvo.qtd += 1;
+      alvo.total += s.total || 0;
+      const cli = s.customer || "Avulso";
+      if (!clientes[cli]) clientes[cli] = {
+        nome: cli,
+        qtd: 0,
+        total: 0
+      };
+      clientes[cli].qtd += 1;
+      clientes[cli].total += s.total || 0;
+      if (s.date) porDia[s.date] = (porDia[s.date] || 0) + (s.total || 0);
+      if (!maior || (s.total || 0) > (maior.total || 0)) maior = s;
+    });
+    // série para o gráfico: valor por dia (até 31 dias com venda) ou por mês
+    const dias = Object.keys(porDia).sort();
+    const porMes = dias.length > 31;
+    const mapaSerie = {};
+    dias.forEach(dia => {
+      const chave = porMes ? dia.slice(0, 7) : dia;
+      mapaSerie[chave] = (mapaSerie[chave] || 0) + porDia[dia];
+    });
+    const serie = Object.keys(mapaSerie).sort().map(chave => ({
+      chave,
+      valor: mapaSerie[chave],
+      label: porMes ? chave.slice(5) + "/" + chave.slice(2, 4) : chave.slice(8) + "/" + chave.slice(5, 7)
+    }));
+    // A Prazo: separa o que já foi recebido do que ainda está em aberto
+    const prazo = pagSel === "A Prazo" ? (() => {
+      const abertas = lista.filter(s => s.prazoPago !== true);
+      const pagas = lista.filter(s => s.prazoPago === true);
+      return {
+        aberto: abertas.reduce((t, s) => t + (s.total || 0), 0),
+        qtdAberto: abertas.length,
+        recebido: pagas.reduce((t, s) => t + (s.total || 0), 0),
+        qtdRecebido: pagas.length
+      };
+    })() : null;
+    return {
+      forma: pagSel,
+      semVendas: lista.length === 0,
+      qtd: lista.length,
+      total,
+      ticket: lista.length > 0 ? total / lista.length : 0,
+      pct: totalGeral > 0 ? total / totalGeral * 100 : 0,
+      varejo,
+      atacado,
+      clientes: Object.values(clientes).sort((x, y) => y.total - x.total).slice(0, 5),
+      maior: maior ? {
+        valor: maior.total || 0,
+        cliente: maior.customer || "Avulso",
+        data: maior.date || ""
+      } : null,
+      serie,
+      serieMensal: porMes,
+      prazo,
+      recentes: ordenada.slice(0, 10),
+      lista: ordenada
+    };
+  })();
+
+  // ── PRODUTOS: retorno no período (qtd, faturamento, custo, lucro, margem, nº de vendas) ──
   const relProdutos = (() => {
     const mapa = {};
     vendasPer.forEach(s => {
+      const vistos = {};
       (s.items || []).forEach(i => {
         const nome = i.name || "—";
         if (!mapa[nome]) mapa[nome] = {
           nome,
           qtd: 0,
           fat: 0,
-          lucro: 0
+          custo: 0,
+          lucro: 0,
+          nVendas: 0
         };
         const q = i.qty || 0;
         const c = i.cost != null && i.cost > 0 ? i.cost : custoDe(nome);
         mapa[nome].qtd += q;
         mapa[nome].fat += (i.price || 0) * q;
+        mapa[nome].custo += c * q;
         mapa[nome].lucro += ((i.price || 0) - c) * q;
+        if (!vistos[nome]) {
+          vistos[nome] = true;
+          mapa[nome].nVendas += 1;
+        }
       });
     });
-    return Object.values(mapa);
+    return Object.values(mapa).map(p => ({
+      ...p,
+      margem: p.fat > 0 ? p.lucro / p.fat * 100 : 0
+    }));
   })();
 
-  // ── ESTOQUE: valor total, custo, venda por mercadoria ──
-  const relEstoque = (() => {
-    let totalCusto = 0,
-      totalVenda = 0;
-    const lista = (products || []).map(p => {
-      const est = +(p.stock || 0);
-      const custoU = +(p.costPrice || 0);
-      const vendaU = +(p.price || 0);
-      const vCusto = est * custoU;
-      const vVenda = est * vendaU;
-      totalCusto += vCusto;
-      totalVenda += vVenda;
-      return {
-        nome: p.name,
-        est,
-        custoU,
-        vendaU,
-        vCusto,
-        vVenda
-      };
-    }).sort((a, b) => b.vVenda - a.vVenda);
+  // Quantos dias a janela do período escolhido cobre (usado no ritmo de venda e cobertura de estoque).
+  // Acompanha exatamente a janela de noPeriodo: hoje = 1 dia, 7 dias = 8, 30 dias = 31.
+  const diasJanela = (() => {
+    if (periodo === "hoje") return 1;
+    if (periodo === "7dias") return 8;
+    if (periodo === "30dias") return 31;
+    const datas = vendasPer.map(s => s.date).filter(Boolean).sort();
+    const ini = periodo === "personalizado" && dataIni ? dataIni : datas[0];
+    const fim = periodo === "personalizado" && dataFim ? dataFim : todayStr();
+    if (!ini) return 1;
+    const dif = Math.round((new Date(fim + "T12:00") - new Date(ini + "T12:00")) / 86400000) + 1;
+    return Math.max(1, dif);
+  })();
+
+  // Detalhe de UM produto no período (aba Produtos → toque no nome do produto)
+  const relProdutoDetalhe = (() => {
+    if (!produtoSel) return null;
+    const prodCad = (products || []).find(x => x.name === produtoSel) || null;
+    const resumo = relProdutos.find(p => p.nome === produtoSel);
+    if (!resumo) return {
+      nome: produtoSel,
+      semVendas: true,
+      prodCad
+    };
+    const novo = () => ({
+      qtd: 0,
+      fat: 0,
+      nVendas: 0
+    });
+    const varejo = novo(),
+      atacado = novo();
+    const clientes = {},
+      pagamentos = {},
+      porDia = {};
+    let semCusto = 0,
+      ultima = "",
+      primeira = "";
+    vendasPer.forEach(s => {
+      let achou = false;
+      (s.items || []).forEach(i => {
+        if ((i.name || "—") !== produtoSel) return;
+        achou = true;
+        const q = i.qty || 0;
+        const v = (i.price || 0) * q;
+        const c = i.cost != null && i.cost > 0 ? i.cost : custoDe(produtoSel);
+        if (!(c > 0)) semCusto += q;
+        const alvo = s.tipo === "atacado" ? atacado : varejo;
+        alvo.qtd += q;
+        alvo.fat += v;
+        const cli = s.customer || "Avulso";
+        if (!clientes[cli]) clientes[cli] = {
+          nome: cli,
+          qtd: 0,
+          fat: 0
+        };
+        clientes[cli].qtd += q;
+        clientes[cli].fat += v;
+        const pg = s.payment || "Outro";
+        if (!pagamentos[pg]) pagamentos[pg] = {
+          forma: pg,
+          fat: 0
+        };
+        pagamentos[pg].fat += v;
+        if (s.date) porDia[s.date] = (porDia[s.date] || 0) + q;
+      });
+      if (achou) {
+        (s.tipo === "atacado" ? atacado : varejo).nVendas += 1;
+        const stamp = (s.date || "") + " " + (s.time || "");
+        if (!ultima || stamp > ultima) ultima = stamp;
+        if (!primeira || stamp < primeira) primeira = stamp;
+      }
+    });
+    // série para o gráfico: por dia (até 31 dias com venda) ou por mês
+    const diasComVenda = Object.keys(porDia).sort();
+    const porMes = diasComVenda.length > 31;
+    const mapaSerie = {};
+    diasComVenda.forEach(dia => {
+      const chave = porMes ? dia.slice(0, 7) : dia;
+      mapaSerie[chave] = (mapaSerie[chave] || 0) + porDia[dia];
+    });
+    const serie = Object.keys(mapaSerie).sort().map(chave => ({
+      chave,
+      qtd: mapaSerie[chave],
+      label: porMes ? chave.slice(5) + "/" + chave.slice(2, 4) : chave.slice(8) + "/" + chave.slice(5, 7)
+    }));
+    const pos = campo => [...relProdutos].sort((x, y) => y[campo] - x[campo]).findIndex(p => p.nome === produtoSel) + 1;
+    const totalFat = relProdutos.reduce((t, p) => t + p.fat, 0);
+    const totalLucro = relProdutos.reduce((t, p) => t + p.lucro, 0);
+    const estoque = prodCad ? +(prodCad.stock || 0) : null;
+    const ritmo = resumo.qtd / diasJanela;
     return {
-      lista,
-      totalCusto,
-      totalVenda,
-      lucroPotencial: totalVenda - totalCusto
+      nome: produtoSel,
+      semVendas: false,
+      prodCad,
+      qtd: resumo.qtd,
+      fat: resumo.fat,
+      custo: resumo.custo,
+      lucro: resumo.lucro,
+      margem: resumo.margem,
+      nVendas: resumo.nVendas,
+      precoMedio: resumo.qtd > 0 ? resumo.fat / resumo.qtd : 0,
+      custoMedio: resumo.qtd > 0 ? resumo.custo / resumo.qtd : 0,
+      lucroUn: resumo.qtd > 0 ? resumo.lucro / resumo.qtd : 0,
+      pctFat: totalFat > 0 ? resumo.fat / totalFat * 100 : 0,
+      pctLucro: totalLucro > 0 ? resumo.lucro / totalLucro * 100 : 0,
+      posQtd: pos("qtd"),
+      posFat: pos("fat"),
+      posLucro: pos("lucro"),
+      totalProdutos: relProdutos.length,
+      varejo,
+      atacado,
+      clientes: Object.values(clientes).sort((x, y) => y.fat - x.fat).slice(0, 5),
+      pagamentos: Object.values(pagamentos).sort((x, y) => y.fat - x.fat).slice(0, 4),
+      serie,
+      serieMensal: porMes,
+      semCusto,
+      ultima,
+      primeira,
+      estoque,
+      coberturaDias: estoque != null && estoque > 0 && ritmo > 0 ? estoque / ritmo : null,
+      diasJanela
     };
   })();
 
@@ -13753,7 +14016,7 @@ function RelatoriosPage(_refRel) {
     };
   }).sort((a, b) => a.nome.localeCompare(b.nome));
 
-  const temporal = tipo !== "entregas" && tipo !== "fornecedores" && tipo !== "estoque" && tipo !== "prazo";
+  const temporal = tipo !== "entregas" && tipo !== "fornecedores" && tipo !== "prazo";
   const periodoLabel = periodo === "hoje" ? "Hoje" : periodo === "7dias" ? "Últimos 7 dias" : periodo === "30dias" ? "Últimos 30 dias" : periodo === "personalizado" ? (dataIni || "início") + " até " + (dataFim || "hoje") : "Todo o período";
 
   // ── PDF ──
@@ -13764,27 +14027,27 @@ function RelatoriosPage(_refRel) {
     const td = "style='padding:7px 8px;border-bottom:1px solid #ddd;font-size:12px'";
     const tdR = "style='padding:7px 8px;border-bottom:1px solid #ddd;font-size:12px;text-align:right'";
     const tdC = "style='padding:7px 8px;border-bottom:1px solid #ddd;font-size:12px;text-align:center'";
-    if (tipo === "vendas") {
-      titulo = "Relatório de Vendas";
-      corpo = "<table style='width:100%;border-collapse:collapse'>" + "<tr><td " + td + ">Total de vendas</td><td " + tdR + "><b>" + fmt(relVendas.total) + "</b></td></tr>" + "<tr><td " + td + ">Quantidade</td><td " + tdR + ">" + relVendas.qtd + "</td></tr>" + "<tr><td " + td + ">Ticket médio</td><td " + tdR + ">" + fmt(relVendas.ticket) + "</td></tr>" + "<tr><td " + td + ">Varejo</td><td " + tdR + ">" + relVendas.qtdVarejo + " · " + fmt(relVendas.totalVarejo) + "</td></tr>" + "<tr><td " + td + ">Atacado</td><td " + tdR + ">" + relVendas.qtdAtacado + " · " + fmt(relVendas.totalAtacado) + "</td></tr>" + "</table>";
+    if (tipo === "vendas" && relPagamentoDetalhe) {
+      const det = relPagamentoDetalhe;
+      titulo = "Vendas pagas em " + det.forma;
+      const fdp = dt => dt ? dt.split("-").reverse().join("/") : "—";
+      const ehPrazo = det.forma === "A Prazo";
+      corpo = "<p style='font-size:13px'><b>Vendas:</b> " + det.qtd + " &nbsp;&nbsp; <b>Total:</b> " + fmt(det.total) + " &nbsp;&nbsp; <b>Ticket médio:</b> " + fmt(det.ticket) + " &nbsp;&nbsp; <b>% das vendas:</b> " + det.pct.toFixed(1).replace(".", ",") + "%</p>" + (det.prazo ? "<p style='font-size:13px'><b>Recebido:</b> " + fmt(det.prazo.recebido) + " &nbsp;&nbsp; <b>Em aberto:</b> " + fmt(det.prazo.aberto) + "</p>" : "") + "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Data</th><th " + th + ">Cliente</th><th " + th + ">Modalidade</th>" + (ehPrazo ? "<th " + th + ">Situação</th>" : "") + "<th " + th + " style='text-align:right'>Valor</th></tr>" + det.lista.map(v => "<tr><td " + td + ">" + fdp(v.date) + " " + (v.time || "") + "</td><td " + td + ">" + (v.customer || "Avulso") + "</td><td " + td + ">" + (v.tipo === "atacado" ? "Atacado" : "Varejo") + "</td>" + (ehPrazo ? "<td " + td + ">" + (v.prazoPago === true ? "Pago" : "Em aberto") + "</td>" : "") + "<td " + tdR + ">" + fmt(v.total) + "</td></tr>").join("") + "<tr><td " + td + " colspan='" + (ehPrazo ? 4 : 3) + "'><b>Total</b></td><td " + tdR + "><b>" + fmt(det.total) + "</b></td></tr></table>";
+    } else if (tipo === "vendas") {
+      titulo = "Relatório de Vendas e Pagamentos";
+      corpo = "<table style='width:100%;border-collapse:collapse'>" + "<tr><td " + td + ">Total de vendas</td><td " + tdR + "><b>" + fmt(relVendas.total) + "</b></td></tr>" + "<tr><td " + td + ">Quantidade</td><td " + tdR + ">" + relVendas.qtd + "</td></tr>" + "<tr><td " + td + ">Ticket médio</td><td " + tdR + ">" + fmt(relVendas.ticket) + "</td></tr>" + "<tr><td " + td + ">Varejo</td><td " + tdR + ">" + relVendas.qtdVarejo + " · " + fmt(relVendas.totalVarejo) + "</td></tr>" + "<tr><td " + td + ">Atacado</td><td " + tdR + ">" + relVendas.qtdAtacado + " · " + fmt(relVendas.totalAtacado) + "</td></tr>" + "</table>" + (relPagamento.length > 0 ? "<h3 style='font-size:14px;margin:18px 0 6px'>Formas de pagamento</h3><table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Forma</th><th " + th + " style='text-align:center'>Vendas</th><th " + th + " style='text-align:right'>Total</th><th " + th + " style='text-align:right'>%</th></tr>" + relPagamento.map(p => "<tr><td " + td + ">" + p.forma + "</td><td " + tdC + ">" + p.qtd + "</td><td " + tdR + ">" + fmt(p.total) + "</td><td " + tdR + ">" + p.pct.toFixed(1).replace(".", ",") + "%</td></tr>").join("") + "</table>" : "");
     } else if (tipo === "lucro") {
       titulo = "Relatório de Lucro";
       corpo = "<table style='width:100%;border-collapse:collapse'>" + "<tr><td " + td + ">Receita (vendas)</td><td " + tdR + ">" + fmt(relLucro.receita) + "</td></tr>" + "<tr><td " + td + ">Custo das mercadorias</td><td " + tdR + ">" + fmt(relLucro.custo) + "</td></tr>" + "<tr><td " + td + "><b>Lucro bruto</b></td><td " + tdR + "><b>" + fmt(relLucro.lucro) + "</b></td></tr>" + "<tr><td " + td + ">Margem</td><td " + tdR + ">" + relLucro.margem.toFixed(1) + "%</td></tr>" + "</table><p style='font-size:11px;color:#888'>Custo baseado no valor atual de cada produto no estoque.</p>";
-    } else if (tipo === "comissao") {
-      titulo = "Relatório de Comissões";
-      corpo = "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Vendedor</th><th " + th + " style='text-align:center'>Vendas</th><th " + th + " style='text-align:right'>Pendente</th><th " + th + " style='text-align:right'>Pago</th><th " + th + " style='text-align:right'>Total</th></tr>" + relComissao.lista.map(c => "<tr><td " + td + ">" + c.nome + "</td><td " + tdC + ">" + c.qtd + "</td><td " + tdR + ">" + fmt(c.pendente) + "</td><td " + tdR + ">" + fmt(c.pago) + "</td><td " + tdR + "><b>" + fmt(c.total) + "</b></td></tr>").join("") + "<tr><td " + td + " colspan='4'><b>Total geral</b></td><td " + tdR + "><b>" + fmt(relComissao.geral) + "</b></td></tr></table>";
     } else if (tipo === "clientes") {
       if (relClienteDetalhe) {
         const det = relClienteDetalhe;
         titulo = "Relatório de Cliente — " + det.cliente;
-        corpo = "<p style='font-size:13px'><b>Compras no período:</b> " + det.qtdCompras + " &nbsp;&nbsp; <b>Total gasto:</b> " + fmt(det.total) + "</p>" + "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Produto</th><th " + th + " style='text-align:center'>Qtd</th><th " + th + " style='text-align:right'>Subtotal</th></tr>" + det.produtos.map(p => "<tr><td " + td + ">" + p.nome + "</td><td " + tdC + ">" + p.qtd + "</td><td " + tdR + ">" + fmt(p.subtotal) + "</td></tr>").join("") + "<tr><td " + td + " colspan='2'><b>Total</b></td><td " + tdR + "><b>" + fmt(det.total) + "</b></td></tr></table>";
+        corpo = "<p style='font-size:13px'><b>Compras no período:</b> " + det.qtdCompras + " &nbsp;&nbsp; <b>Total gasto:</b> " + fmt(det.total) + " &nbsp;&nbsp; <b>Ticket médio:</b> " + fmt(det.ticketMedio) + "</p>" + "<p style='font-size:13px'><b>Última compra:</b> " + (det.ultimaCompra ? det.ultimaCompra.split(" ")[0].split("-").reverse().join("/") + " (" + fmt(det.ultimaCompraValor) + ")" : "—") + " &nbsp;&nbsp; <b>Produto mais comprado:</b> " + (det.maisComprado ? det.maisComprado.nome + " (" + det.maisComprado.qtd + " un)" : "—") + "</p>" + "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Produto</th><th " + th + " style='text-align:center'>Qtd</th><th " + th + " style='text-align:right'>Subtotal</th></tr>" + det.produtos.map(p => "<tr><td " + td + ">" + p.nome + "</td><td " + tdC + ">" + p.qtd + "</td><td " + tdR + ">" + fmt(p.subtotal) + "</td></tr>").join("") + "<tr><td " + td + " colspan='2'><b>Total</b></td><td " + tdR + "><b>" + fmt(det.total) + "</b></td></tr></table>";
       } else {
         titulo = "Relatório de Clientes";
         corpo = "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Cliente</th><th " + th + " style='text-align:center'>Compras</th><th " + th + " style='text-align:right'>Total</th></tr>" + relClientes.map(c => "<tr><td " + td + ">" + c.nome + "</td><td " + tdC + ">" + c.qtd + "</td><td " + tdR + ">" + fmt(c.total) + "</td></tr>").join("") + "</table>";
       }
-    } else if (tipo === "pagamento") {
-      titulo = "Relatório de Meios de Pagamento";
-      corpo = "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Forma</th><th " + th + " style='text-align:center'>Qtd</th><th " + th + " style='text-align:right'>Total</th></tr>" + relPagamento.map(p => "<tr><td " + td + ">" + p.forma + "</td><td " + tdC + ">" + p.qtd + "</td><td " + tdR + ">" + fmt(p.total) + "</td></tr>").join("") + "</table>";
     } else if (tipo === "atacadoMais") {
       titulo = "Vendido a Mais — Venda Atacado";
       corpo = relAtacado.vendasSobrepreco.length === 0 ? "<p style='font-size:13px;color:#888'>Nenhuma venda de atacado acima ou abaixo do preço de tabela no período.</p>" : relAtacado.vendasSobrepreco.map(v => "<div style='padding:8px 0;border-bottom:1px solid #eee;font-size:12px'>" + "<b>" + v.customer + "</b> <span style='color:#888'>· " + v.date + " " + v.time + "</span><br>" + "<span style='color:#666'>" + v.items.map(it => (it.qty || 0) + "x " + it.name).join(", ") + "</span><br>" + "Valor do pedido: <b>" + fmt(v.total) + "</b> &nbsp;·&nbsp; " + (v.sobreprecoVenda >= 0 ? "A mais: <b style='color:#16a34a'>" : "A menos: <b style='color:#dc2626'>") + fmt(Math.abs(v.sobreprecoVenda)) + "</b></div>").join("") + "<table style='width:100%;border-collapse:collapse;margin-top:14px;border-top:2px solid #333'><tr><td " + td + ">Vendido a mais</td><td " + tdR + " style='color:#16a34a'>" + fmt(relAtacado.totalAMais) + "</td></tr><tr><td " + td + ">Vendido a menos</td><td " + tdR + " style='color:#dc2626'>− " + fmt(Math.abs(relAtacado.totalAMenos)) + "</td></tr><tr><td " + td + "><b>Saldo líquido (a mais − a menos)</b></td><td " + tdR + "><b>" + (relAtacado.sobrepreco < 0 ? "− " : "") + fmt(Math.abs(relAtacado.sobrepreco)) + "</b></td></tr></table>";
@@ -13795,9 +14058,6 @@ function RelatoriosPage(_refRel) {
       titulo = "Produtos — Retorno no Período";
       const ord = [...relProdutos].sort((a, b) => b.lucro - a.lucro);
       corpo = "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Produto</th><th " + th + " style='text-align:center'>Qtd</th><th " + th + " style='text-align:right'>Faturamento</th><th " + th + " style='text-align:right'>Lucro</th></tr>" + ord.map(p => "<tr><td " + td + ">" + p.nome + "</td><td " + tdC + ">" + p.qtd + "</td><td " + tdR + ">" + fmt(p.fat) + "</td><td " + tdR + ">" + fmt(p.lucro) + "</td></tr>").join("") + "</table>";
-    } else if (tipo === "estoque") {
-      titulo = "Relatório de Estoque (valor)";
-      corpo = "<table style='width:100%;border-collapse:collapse'>" + "<tr><td " + td + ">Valor total em custo</td><td " + tdR + ">" + fmt(relEstoque.totalCusto) + "</td></tr>" + "<tr><td " + td + ">Valor total em venda</td><td " + tdR + ">" + fmt(relEstoque.totalVenda) + "</td></tr>" + "<tr><td " + td + "><b>Lucro potencial</b></td><td " + tdR + "><b>" + fmt(relEstoque.lucroPotencial) + "</b></td></tr></table>" + "<table style='width:100%;border-collapse:collapse;margin-top:14px'><tr><th " + th + ">Mercadoria</th><th " + th + " style='text-align:center'>Estoque</th><th " + th + " style='text-align:right'>Custo tot.</th><th " + th + " style='text-align:right'>Venda tot.</th></tr>" + relEstoque.lista.map(p => "<tr><td " + td + ">" + p.nome + "</td><td " + tdC + ">" + p.est + "</td><td " + tdR + ">" + fmt(p.vCusto) + "</td><td " + tdR + ">" + fmt(p.vVenda) + "</td></tr>").join("") + "</table>";
     } else if (tipo === "entregas") {
       titulo = "Relatório de Entregas";
       corpo = "<table style='width:100%;border-collapse:collapse'>" + "<tr><td " + td + ">📋 Pedido</td><td " + tdR + ">" + relEntregas.porStatus.pedido + "</td></tr>" + "<tr><td " + td + ">📦 Separando</td><td " + tdR + ">" + relEntregas.porStatus.separando + "</td></tr>" + "<tr><td " + td + ">🚚 Em Rota</td><td " + tdR + ">" + relEntregas.porStatus.rota + "</td></tr>" + "<tr><td " + td + ">✅ Concluído</td><td " + tdR + ">" + relEntregas.porStatus.concluido + "</td></tr>" + "<tr><td " + td + "><b>Total</b></td><td " + tdR + "><b>" + relEntregas.qtd + "</b></td></tr>" + "<tr><td " + td + ">Valor total</td><td " + tdR + ">" + fmt(relEntregas.totalValor) + "</td></tr></table>";
@@ -13805,12 +14065,12 @@ function RelatoriosPage(_refRel) {
       titulo = "Relatório de Fornecedores";
       corpo = "<table style='width:100%;border-collapse:collapse'><tr><th " + th + ">Fornecedor</th><th " + th + ">CNPJ</th><th " + th + ">Telefone</th><th " + th + ">Cidade</th><th " + th + " style='text-align:right'>Total comprado</th><th " + th + " style='text-align:center'>Pendentes</th></tr>" + relFornecedores.map(f => "<tr><td " + td + ">" + f.nome + "</td><td " + td + ">" + f.cnpj + "</td><td " + td + ">" + f.telefone + "</td><td " + td + ">" + f.cidade + "</td><td " + td + " style='text-align:right'>" + (f.totalComprado > 0 ? fmt(f.totalComprado) : "—") + "</td><td " + td + " style='text-align:center'>" + (f.qtdPendentes > 0 ? f.qtdPendentes : "—") + "</td></tr>").join("") + "</table>";
     }
-    const contexto = tipo === "entregas" || tipo === "fornecedores" || tipo === "estoque" ? "Situação atual" : periodoLabel;
+    const contexto = tipo === "entregas" || tipo === "fornecedores" ? "Situação atual" : periodoLabel;
     const htmlRel = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + titulo + "</title><style>*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}</style></head>" + "<body style='font-family:Arial,sans-serif;padding:30px;color:#222'>" + "<h2 style='color:#E8682A;margin:0 0 4px'>" + titulo + "</h2>" + "<div style='color:#666;font-size:13px;margin-bottom:18px'>VENDAS PECUARÃO · " + contexto + " · " + new Date().toLocaleString("pt-BR") + "</div>" + corpo + "</body></html>";
     printHTMLDoc(htmlRel);
   };
 
-  const abas = [["vendas", "💰 Vendas"], ["atacado", "📦 Atacado"], ["lucro", "📈 Lucro"], ["comissao", "🤝 Comissão"], ["produtos", "🏆 Produtos"], ["estoque", "📦 Estoque"], ["clientes", "👥 Clientes"], ["entregas", "🚚 Entregas"], ["fornecedores", "🏭 Fornecedores"], ["pagamento", "💳 Pagamentos"], ["atacadoMais", "💵 A Mais (Atacado)"]];
+  const abas = [["vendas", "💰 Vendas e Pagamentos"], ["atacado", "📦 Atacado"], ["lucro", "📈 Lucro"], ["produtos", "🏆 Produtos"], ["clientes", "👥 Clientes"], ["entregas", "🚚 Entregas"], ["fornecedores", "🏭 Fornecedores"], ["atacadoMais", "💵 A Mais (Atacado)"]];
 
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -13926,12 +14186,26 @@ function RelatoriosPage(_refRel) {
     relVendas,
     relAtacado,
     relLucro,
-    relComissao,
     relClientes,
     relClienteDetalhe,
+    ordemCli,
+    buscaCli,
+    onOrdemCli: setOrdemCli,
+    onBuscaCli: setBuscaCli,
+    onSelCliente: setClienteFiltro,
     relPagamento,
+    relPagamentoDetalhe,
+    pagSel,
+    onSelPagamento: setPagSel,
     relProdutos,
-    relEstoque,
+    relProdutoDetalhe,
+    produtoSel,
+    ordemProd,
+    buscaProd,
+    periodoLabel,
+    onSelProduto: setProdutoSel,
+    onOrdem: setOrdemProd,
+    onBusca: setBuscaProd,
     relEntregas,
     relFornecedores,
     S
@@ -14376,8 +14650,207 @@ function renderRelatorioConteudo(tipo, d) {
   }, txt);
 
   if (tipo === "vendas") {
+    const h = React.createElement;
+    const pct = n => (isFinite(n) ? n : 0).toFixed(1).replace(".", ",") + "%";
+    const fd = dt => dt ? dt.split("-").reverse().join("/") : "—";
+    const fdt = st => st ? fd(st.split(" ")[0]) + (st.split(" ")[1] ? " " + st.split(" ")[1] : "") : "—";
+    const periodoTxt = d.periodoLabel || "";
+    const subtitulo = t => h("div", {
+      style: {
+        fontSize: 12,
+        fontWeight: 700,
+        color: "#E8682A",
+        margin: "16px 0 4px"
+      }
+    }, t);
     const v = d.relVendas;
-    return /*#__PURE__*/React.createElement("div", null, linha("Total de vendas", fmt(v.total), "#4ade80"), linha("Quantidade", v.qtd + " venda(s)"), linha("Ticket médio", fmt(v.ticket)), linha("🏪 Varejo", v.qtdVarejo + " · " + fmt(v.totalVarejo)), linha("📦 Atacado", v.qtdAtacado + " · " + fmt(v.totalAtacado)));
+
+    // ── DETALHE DA FORMA DE PAGAMENTO ──
+    if (d.pagSel && d.relPagamentoDetalhe) {
+      const det = d.relPagamentoDetalhe;
+      const voltar = h("button", {
+        onClick: () => d.onSelPagamento(""),
+        style: {
+          ...S.btn("ghost"),
+          padding: "6px 12px",
+          fontSize: 12,
+          marginBottom: 12
+        }
+      }, "← Voltar às vendas");
+      if (det.semVendas) return h("div", null, voltar, h("div", {
+        style: {
+          fontSize: 17,
+          fontWeight: 800
+        }
+      }, "💳 " + det.forma), vazio("Nenhuma venda paga em " + det.forma + " no período (" + periodoTxt + ")."));
+      const kpi = (rot, val, cor, sub) => h("div", {
+        style: {
+          background: "var(--bg-elevated)",
+          borderRadius: 12,
+          padding: "10px 12px",
+          minWidth: 0
+        }
+      }, h("div", {
+        style: {
+          fontSize: 10,
+          color: "var(--text-secondary)",
+          textTransform: "uppercase",
+          letterSpacing: 0.5
+        }
+      }, rot), h("div", {
+        style: {
+          fontSize: 18,
+          fontWeight: 800,
+          color: cor || "var(--text-primary)",
+          marginTop: 2
+        }
+      }, val), sub ? h("div", {
+        style: {
+          fontSize: 10,
+          color: "var(--text-secondary)",
+          marginTop: 1
+        }
+      }, sub) : null);
+      const maxSerie = Math.max(1, ...det.serie.map(x => x.valor));
+      return h("div", null, voltar, h("div", {
+        style: {
+          fontSize: 17,
+          fontWeight: 800
+        }
+      }, "💳 " + det.forma), h("div", {
+        style: {
+          fontSize: 11,
+          color: "var(--text-secondary)",
+          marginBottom: 12
+        }
+      }, periodoTxt + " · " + det.qtd + " venda(s)"), h("div", {
+        style: {
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 8
+        }
+      }, kpi("Total em " + det.forma, fmt(det.total), "#4ade80", det.qtd + " venda(s)"), kpi("% das vendas", pct(det.pct), null, "do total do período"), kpi("Ticket médio", fmt(det.ticket), null, "valor médio por venda"), kpi("Maior venda", det.maior ? fmt(det.maior.valor) : "—", null, det.maior ? det.maior.cliente + " · " + fd(det.maior.data) : "")), det.prazo && h("div", null, subtitulo("⏳ Situação do prazo"), linha("✅ Já recebido (" + det.prazo.qtdRecebido + ")", fmt(det.prazo.recebido), "#4ade80"), linha("⏳ Em aberto (" + det.prazo.qtdAberto + ")", fmt(det.prazo.aberto), det.prazo.aberto > 0 ? "#ff3b3b" : null)), subtitulo("🏪 Varejo × 📦 Atacado"), linha("🏪 Varejo (" + det.varejo.qtd + " venda(s))", fmt(det.varejo.total)), linha("📦 Atacado (" + det.atacado.qtd + " venda(s))", fmt(det.atacado.total), "#f59e0b"), det.clientes.length > 0 && h("div", null, subtitulo("👥 Quem mais paga assim"), det.clientes.map((c, i) => h("div", {
+        key: c.nome
+      }, linha((i + 1) + ". " + c.nome + " (" + c.qtd + ")", fmt(c.total), i === 0 ? "#f59e0b" : null)))), det.serie.length > 1 && h("div", null, subtitulo("📈 Valor recebido " + (det.serieMensal ? "por mês" : "por dia")), h("div", {
+        style: {
+          display: "flex",
+          alignItems: "flex-end",
+          gap: 3,
+          height: 70,
+          marginTop: 6
+        }
+      }, det.serie.map(x => h("div", {
+        key: x.chave,
+        title: x.label + ": " + fmt(x.valor),
+        style: {
+          flex: 1,
+          minWidth: 4,
+          height: Math.max(4, x.valor / maxSerie * 100) + "%",
+          background: "#E8682A",
+          borderRadius: "3px 3px 0 0"
+        }
+      }))), h("div", {
+        style: {
+          display: "flex",
+          justifyContent: "space-between",
+          fontSize: 10,
+          color: "var(--text-secondary)",
+          marginTop: 3
+        }
+      }, h("span", null, det.serie[0].label), h("span", null, det.serie[det.serie.length - 1].label))), subtitulo("🧾 Vendas recentes (" + Math.min(10, det.qtd) + " de " + det.qtd + ")"), det.recentes.map((x, i) => h("div", {
+        key: x.id || i,
+        style: {
+          padding: "6px 0",
+          borderBottom: "1px solid var(--bg-elevated)"
+        }
+      }, h("div", {
+        style: {
+          display: "flex",
+          justifyContent: "space-between",
+          fontSize: 12
+        }
+      }, h("span", null, fdt((x.date || "") + " " + (x.time || "")) + " · " + (x.tipo === "atacado" ? "📦 " : "🏪 ") + (x.customer || "Avulso")), h("b", null, fmt(x.total))), det.forma === "A Prazo" && h("div", {
+        style: {
+          fontSize: 11,
+          color: x.prazoPago === true ? "#4ade80" : "#ff3b3b"
+        }
+      }, x.prazoPago === true ? "✅ Pago" : "⏳ Em aberto"))), det.qtd > 10 && h("div", {
+        style: {
+          fontSize: 11,
+          color: "var(--text-secondary)",
+          marginTop: 6
+        }
+      }, "O PDF traz todas as " + det.qtd + " vendas."), h("div", {
+        style: {
+          fontSize: 11,
+          color: "var(--text-secondary)",
+          marginTop: 14
+        }
+      }, "Valores = total das vendas no período, já com desconto."));
+    }
+
+    // ── RESUMO + FORMAS DE PAGAMENTO (clicáveis) ──
+    return h("div", null, linha("Total de vendas", fmt(v.total), "#4ade80"), linha("Quantidade", v.qtd + " venda(s)"), linha("Ticket médio", fmt(v.ticket)), linha("🏪 Varejo", v.qtdVarejo + " · " + fmt(v.totalVarejo)), linha("📦 Atacado", v.qtdAtacado + " · " + fmt(v.totalAtacado)), subtitulo("💳 Como pagaram · toque para ver os detalhes"), d.relPagamento.length === 0 ? vazio("Nenhuma venda no período.") : d.relPagamento.map(p => h("div", {
+      key: p.forma,
+      role: "button",
+      onClick: () => d.onSelPagamento(p.forma),
+      style: {
+        padding: "10px 0",
+        borderBottom: "1px solid var(--bg-elevated)",
+        cursor: "pointer"
+      }
+    }, h("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 10
+      }
+    }, h("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, h("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 700,
+        color: "#E8682A"
+      }
+    }, p.forma, " ›"), h("div", {
+      style: {
+        fontSize: 11,
+        color: "var(--text-secondary)"
+      }
+    }, p.qtd + " venda(s) · ticket " + fmt(p.ticket))), h("div", {
+      style: {
+        textAlign: "right",
+        whiteSpace: "nowrap"
+      }
+    }, h("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 700
+      }
+    }, fmt(p.total)), h("div", {
+      style: {
+        fontSize: 11,
+        color: "var(--text-secondary)"
+      }
+    }, pct(p.pct)))), h("div", {
+      style: {
+        height: 4,
+        borderRadius: 2,
+        background: "var(--bg-elevated)",
+        marginTop: 6,
+        overflow: "hidden"
+      }
+    }, h("div", {
+      style: {
+        width: Math.min(100, p.pct) + "%",
+        height: "100%",
+        background: "#E8682A"
+      }
+    })))));
   }
   if (tipo === "atacado") {
     const a = d.relAtacado;
@@ -14413,139 +14886,481 @@ function renderRelatorioConteudo(tipo, d) {
       }
     }, "Custo calculado pelo valor atual de cada produto no estoque."));
   }
-  if (tipo === "comissao") {
-    const c = d.relComissao;
-    if (c.lista.length === 0) return vazio("Nenhuma comissão no período.");
-    return /*#__PURE__*/React.createElement("div", null, c.lista.map((v, i) => /*#__PURE__*/React.createElement("div", {
-      key: i,
-      style: {
-        padding: "10px 0",
-        borderBottom: "1px solid var(--bg-elevated)"
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: "flex",
-        justifyContent: "space-between",
-        marginBottom: 3
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 13,
-        fontWeight: 700
-      }
-    }, v.nome, " (", v.qtd, ")"), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 14,
-        fontWeight: 700,
-        color: "#4A5BC4"
-      }
-    }, fmt(v.total))), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 11,
-        color: "var(--text-secondary)"
-      }
-    }, "Pendente: ", fmt(v.pendente), " · Pago: ", fmt(v.pago)))), linha("💰 Total geral", fmt(c.geral), "#4A5BC4"));
-  }
   if (tipo === "produtos") {
-    if (d.relProdutos.length === 0) return vazio("Nenhuma venda no período.");
-    const porLucro = [...d.relProdutos].sort((a, b) => b.lucro - a.lucro).slice(0, 3);
-    const porFat = [...d.relProdutos].sort((a, b) => b.fat - a.fat).slice(0, 3);
-    const porQtd = [...d.relProdutos].sort((a, b) => b.qtd - a.qtd).slice(0, 3);
-    const bloco = (titulo, lista, fmtVal) => /*#__PURE__*/React.createElement("div", {
-      style: {
-        marginBottom: 14
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 12,
-        fontWeight: 700,
-        color: "#E8682A",
-        marginBottom: 4
-      }
-    }, titulo), lista.map((p, i) => linha((i + 1) + ". " + p.nome, fmtVal(p), i === 0 ? "#f59e0b" : null)));
-    return /*#__PURE__*/React.createElement("div", null, bloco("🏆 Maior lucro", porLucro, p => fmt(p.lucro)), bloco("💵 Maior faturamento", porFat, p => fmt(p.fat)), bloco("📊 Mais vendidos (qtd)", porQtd, p => p.qtd + " un"));
-  }
-  if (tipo === "estoque") {
-    const e = d.relEstoque;
-    return /*#__PURE__*/React.createElement("div", null, linha("Valor total em custo", fmt(e.totalCusto), "#ff9f43"), linha("Valor total em venda", fmt(e.totalVenda), "#4ade80"), linha("Lucro potencial", fmt(e.lucroPotencial), "#4A5BC4"), /*#__PURE__*/React.createElement("div", {
+    const h = React.createElement;
+    // quantidade pode ser fracionada (peso): até 3 casas, sem zeros sobrando
+    const fq = q => (+q || 0) % 1 !== 0 ? (+q).toFixed(3).replace(/\.?0+$/, "").replace(".", ",") : String(+q || 0);
+    const pct = n => (isFinite(n) ? n : 0).toFixed(1).replace(".", ",") + "%";
+    const fd = dt => dt ? dt.split("-").reverse().join("/") : "—";
+    const corMargem = (lucro, margem) => lucro < 0 ? "#ff3b3b" : margem < 10 ? "#f59e0b" : "#4ade80";
+    const periodoTxt = d.periodoLabel || "";
+    const subtitulo = t => h("div", {
       style: {
         fontSize: 12,
         fontWeight: 700,
         color: "#E8682A",
-        margin: "14px 0 4px"
+        margin: "16px 0 4px"
       }
-    }, "Por mercadoria (maior valor primeiro)"), e.lista.slice(0, 30).map((p, i) => /*#__PURE__*/React.createElement("div", {
-      key: i,
-      style: {
-        padding: "8px 0",
-        borderBottom: "1px solid var(--bg-elevated)"
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: "flex",
-        justifyContent: "space-between"
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 13,
-        fontWeight: 600
-      }
-    }, p.nome), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 12,
-        color: "var(--text-secondary)"
-      }
-    }, p.est, " un")), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 11,
-        color: "var(--text-secondary)"
-      }
-    }, "Custo: ", fmt(p.vCusto), " · Venda: ", fmt(p.vVenda)))), e.lista.length > 30 && /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 11,
-        color: "var(--text-secondary)",
-        marginTop: 8,
-        textAlign: "center"
-      }
-    }, "Mostrando os 30 de maior valor. O PDF traz todos."));
-  }
-  if (tipo === "clientes") {
-    if (d.relClienteDetalhe) {
-      const det = d.relClienteDetalhe;
-      if (det.produtos.length === 0) return vazio("Nenhuma compra de " + det.cliente + " no período.");
-      return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    }, t);
+
+    // ── DETALHE DO PRODUTO ──
+    if (d.produtoSel && d.relProdutoDetalhe) {
+      const det = d.relProdutoDetalhe;
+      const voltar = h("button", {
+        onClick: () => d.onSelProduto(null),
         style: {
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 12,
-          paddingBottom: 10,
-          borderBottom: "1px solid var(--bg-elevated)"
+          ...S.btn("ghost"),
+          padding: "6px 12px",
+          fontSize: 12,
+          marginBottom: 12
         }
-      }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      }, "← Voltar à lista");
+      if (det.semVendas) return h("div", null, voltar, h("div", {
         style: {
+          fontSize: 16,
+          fontWeight: 800
+        }
+      }, det.nome), vazio("Nenhuma venda deste produto no período (" + periodoTxt + ")."));
+      const kpi = (rot, val, cor, sub) => h("div", {
+        style: {
+          background: "var(--bg-elevated)",
+          borderRadius: 12,
+          padding: "10px 12px"
+        }
+      }, h("div", {
+        style: {
+          fontSize: 10,
+          color: "var(--text-secondary)",
+          textTransform: "uppercase",
+          letterSpacing: 0.5
+        }
+      }, rot), h("div", {
+        style: {
+          fontSize: 18,
           fontWeight: 800,
-          fontSize: 15
+          color: cor || "var(--text-primary)",
+          marginTop: 2
         }
-      }, det.cliente), /*#__PURE__*/React.createElement("div", {
+      }, val), sub ? h("div", {
+        style: {
+          fontSize: 10,
+          color: "var(--text-secondary)",
+          marginTop: 1
+        }
+      }, sub) : null);
+      const prod = det.prodCad;
+      const margemTab = preco => preco > 0 && prod && +prod.costPrice > 0 ? pct((preco - +prod.costPrice) / preco * 100) : "sem custo";
+      const maxSerie = Math.max(1, ...det.serie.map(x => x.qtd));
+      const alertas = [];
+      if (det.semCusto > 0) alertas.push("⚠️ " + fq(det.semCusto) + " un vendidas sem custo cadastrado: o lucro e a margem deste produto podem estar maiores do que são.");
+      return h("div", null, voltar, h("div", {
+        style: {
+          fontSize: 17,
+          fontWeight: 800
+        }
+      }, det.nome), h("div", {
+        style: {
+          fontSize: 11,
+          color: "var(--text-secondary)",
+          marginBottom: 12
+        }
+      }, periodoTxt + " · " + det.nVendas + " venda(s)"), h("div", {
+        style: {
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 8
+        }
+      }, kpi("Total vendido", fmt(det.fat), "#4ade80", fq(det.qtd) + " un"), kpi("Lucro (valor ganho)", fmt(det.lucro), det.lucro >= 0 ? "#4ade80" : "#ff3b3b", fmt(det.lucroUn) + " por un"), kpi("Margem", pct(det.margem), corMargem(det.lucro, det.margem), "lucro ÷ venda"), kpi("Quantidade vendida", fq(det.qtd) + " un", null, "em " + det.nVendas + " venda(s)")), alertas.map((t, i) => h("div", {
+        key: i,
+        style: {
+          marginTop: 10,
+          padding: "8px 10px",
+          borderRadius: 8,
+          background: "#f59e0b18",
+          border: "1px solid #f59e0b40",
+          fontSize: 12,
+          color: "#f59e0b"
+        }
+      }, t)), subtitulo("📊 Resumo do período"), linha("Preço médio de venda", fmt(det.precoMedio)), linha("Custo médio", fmt(det.custoMedio), "#ff9f43"), linha("Lucro por unidade", fmt(det.lucroUn), det.lucroUn >= 0 ? "#4ade80" : "#ff3b3b"), linha("% do faturamento do período", pct(det.pctFat)), linha("% do lucro do período", pct(det.pctLucro)), linha("Ranking · quantidade", det.posQtd + "º de " + det.totalProdutos), linha("Ranking · faturamento", det.posFat + "º de " + det.totalProdutos), linha("Ranking · lucro", det.posLucro + "º de " + det.totalProdutos), linha("Última venda", det.ultima ? fd(det.ultima.split(" ")[0]) + " " + (det.ultima.split(" ")[1] || "") : "—"), (det.varejo.nVendas > 0 || det.atacado.nVendas > 0) && h("div", null, subtitulo("🏪 Varejo × 📦 Atacado"), linha("🏪 Varejo (" + det.varejo.nVendas + " venda(s))", fq(det.varejo.qtd) + " un · " + fmt(det.varejo.fat)), linha("📦 Atacado (" + det.atacado.nVendas + " venda(s))", fq(det.atacado.qtd) + " un · " + fmt(det.atacado.fat), "#f59e0b")), subtitulo("📦 Estoque"), prod ? h("div", null, linha("Estoque atual", fq(det.estoque) + " un", det.estoque <= 0 ? "#ff3b3b" : null), linha("Cobertura no ritmo do período", det.estoque <= 0 ? "Sem estoque" : det.coberturaDias != null ? "≈ " + Math.round(det.coberturaDias) + " dia(s)" : "—")) : h("div", {
         style: {
           fontSize: 12,
           color: "var(--text-secondary)"
         }
-      }, det.qtdCompras, " compra(s) no per\xEDodo")), /*#__PURE__*/React.createElement("div", {
+      }, "Produto não está mais no cadastro."), prod && h("div", null, subtitulo("🏷️ Referência de tabela (hoje)"), linha("Custo atual", +prod.costPrice > 0 ? fmt(+prod.costPrice) : "não cadastrado", "#ff9f43"), linha("Varejo · " + fmt(+prod.price || 0), "margem " + margemTab(+prod.price || 0)), +prod.priceAtacado > 0 && linha("Atacado · " + fmt(+prod.priceAtacado), "margem " + margemTab(+prod.priceAtacado), "#f59e0b")), det.clientes.length > 0 && h("div", null, subtitulo("👥 Quem mais compra"), det.clientes.map((c, i) => h("div", {
+        key: c.nome
+      }, linha((i + 1) + ". " + c.nome, fmt(c.fat) + " · " + fq(c.qtd) + " un", i === 0 ? "#f59e0b" : null)))), det.pagamentos.length > 0 && h("div", null, subtitulo("💳 Como pagaram"), det.pagamentos.map(pg => h("div", {
+        key: pg.forma
+      }, linha(pg.forma, fmt(pg.fat))))), det.serie.length > 1 && h("div", null, subtitulo("📈 Quantidade vendida " + (det.serieMensal ? "por mês" : "por dia")), h("div", {
         style: {
+          display: "flex",
+          alignItems: "flex-end",
+          gap: 3,
+          height: 70,
+          marginTop: 6
+        }
+      }, det.serie.map(x => h("div", {
+        key: x.chave,
+        title: x.label + ": " + fq(x.qtd) + " un",
+        style: {
+          flex: 1,
+          minWidth: 4,
+          height: Math.max(4, x.qtd / maxSerie * 100) + "%",
+          background: "#E8682A",
+          borderRadius: "3px 3px 0 0"
+        }
+      }))), h("div", {
+        style: {
+          display: "flex",
+          justifyContent: "space-between",
+          fontSize: 10,
+          color: "var(--text-secondary)",
+          marginTop: 3
+        }
+      }, h("span", null, det.serie[0].label), h("span", null, det.serie[det.serie.length - 1].label))), h("div", {
+        style: {
+          fontSize: 11,
+          color: "var(--text-secondary)",
+          marginTop: 14
+        }
+      }, "Valores dos itens vendidos, antes de descontos gerais do pedido. Margem = lucro ÷ valor vendido. Custo: o gravado na venda ou, na falta dele, o custo atual do produto."));
+    }
+
+    // ── RANKING (lista clicável) ──
+    if (d.relProdutos.length === 0) return vazio("Nenhuma venda no período.");
+    const ord = d.ordemProd || "qtd";
+    const opcoes = [["qtd", "🏆 Mais vendidos"], ["fat", "💵 Faturamento"], ["lucro", "📈 Lucro"], ["margem", "% Margem"]];
+    const busca = (d.buscaProd || "").trim().toLowerCase();
+    const ranking = [...d.relProdutos].sort((x, y) => y[ord] - x[ord]).map((p, i) => ({
+      ...p,
+      rank: i + 1
+    }));
+    const filtrada = busca ? ranking.filter(p => p.nome.toLowerCase().includes(busca)) : ranking;
+    const LIMITE = 50;
+    return h("div", null, h("div", {
+      style: {
+        display: "flex",
+        gap: 6,
+        flexWrap: "wrap",
+        marginBottom: 10
+      }
+    }, opcoes.map(o => h("button", {
+      key: o[0],
+      onClick: () => d.onOrdem(o[0]),
+      style: {
+        ...S.btn(ord === o[0] ? "primary" : "ghost"),
+        padding: "6px 12px",
+        fontSize: 12
+      }
+    }, o[1]))), h("input", {
+      style: {
+        ...S.input,
+        fontSize: 13,
+        marginBottom: 8
+      },
+      placeholder: "Buscar produto...",
+      value: d.buscaProd || "",
+      onChange: e => d.onBusca(e.target.value)
+    }), h("div", {
+      style: {
+        fontSize: 11,
+        color: "var(--text-secondary)",
+        marginBottom: 6
+      }
+    }, d.relProdutos.length + " produto(s) vendido(s) · " + periodoTxt + " · toque no nome para ver os detalhes"), filtrada.length === 0 ? vazio("Nenhum produto encontrado.") : filtrada.slice(0, LIMITE).map(p => h("div", {
+      key: p.nome,
+      role: "button",
+      onClick: () => d.onSelProduto(p.nome),
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "10px 0",
+        borderBottom: "1px solid var(--bg-elevated)",
+        cursor: "pointer"
+      }
+    }, h("div", {
+      style: {
+        width: 26,
+        fontSize: 12,
+        fontWeight: 700,
+        color: p.rank <= 3 ? "#f59e0b" : "var(--text-secondary)",
+        textAlign: "center"
+      }
+    }, p.rank + "º"), h("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, h("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 700,
+        color: "#E8682A",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap"
+      }
+    }, p.nome, " ›"), h("div", {
+      style: {
+        fontSize: 11,
+        color: "var(--text-secondary)"
+      }
+    }, fq(p.qtd) + " un · " + p.nVendas + " venda(s)")), h("div", {
+      style: {
+        textAlign: "right",
+        whiteSpace: "nowrap"
+      }
+    }, h("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 700
+      }
+    }, fmt(p.fat)), h("div", {
+      style: {
+        fontSize: 11,
+        color: corMargem(p.lucro, p.margem)
+      }
+    }, "lucro " + fmt(p.lucro) + " · " + pct(p.margem))))), filtrada.length > LIMITE && h("div", {
+      style: {
+        fontSize: 11,
+        color: "var(--text-secondary)",
+        textAlign: "center",
+        padding: "10px 0"
+      }
+    }, "Mostrando " + LIMITE + " de " + filtrada.length + " · use a busca para achar os demais"));
+  }
+  if (tipo === "clientes") {
+    const h = React.createElement;
+    const fq = q => (+q || 0) % 1 !== 0 ? (+q).toFixed(3).replace(/\.?0+$/, "").replace(".", ",") : String(+q || 0);
+    const pct = n => (isFinite(n) ? n : 0).toFixed(1).replace(".", ",") + "%";
+    const fd = dt => dt ? dt.split("-").reverse().join("/") : "—";
+    const fdt = st => st ? fd(st.split(" ")[0]) + (st.split(" ")[1] ? " " + st.split(" ")[1] : "") : "—";
+    const ha = n => n == null ? "" : n === 0 ? "hoje" : n === 1 ? "ontem" : "há " + n + " dias";
+    const periodoTxt = d.periodoLabel || "";
+    const subtitulo = t => h("div", {
+      style: {
+        fontSize: 12,
+        fontWeight: 700,
+        color: "#E8682A",
+        margin: "16px 0 4px"
+      }
+    }, t);
+
+    // ── DETALHE DO CLIENTE ──
+    if (d.relClienteDetalhe) {
+      const det = d.relClienteDetalhe;
+      const voltar = h("button", {
+        onClick: () => d.onSelCliente(""),
+        style: {
+          ...S.btn("ghost"),
+          padding: "6px 12px",
+          fontSize: 12,
+          marginBottom: 12
+        }
+      }, "← Voltar à lista");
+      const kpi = (rot, val, cor, sub, pequeno) => h("div", {
+        style: {
+          background: "var(--bg-elevated)",
+          borderRadius: 12,
+          padding: "10px 12px",
+          minWidth: 0
+        }
+      }, h("div", {
+        style: {
+          fontSize: 10,
+          color: "var(--text-secondary)",
+          textTransform: "uppercase",
+          letterSpacing: 0.5
+        }
+      }, rot), h("div", {
+        style: {
+          fontSize: pequeno ? 14 : 18,
           fontWeight: 800,
+          color: cor || "var(--text-primary)",
+          marginTop: 2,
+          overflowWrap: "anywhere"
+        }
+      }, val), sub ? h("div", {
+        style: {
+          fontSize: 10,
+          color: "var(--text-secondary)",
+          marginTop: 1
+        }
+      }, sub) : null);
+      const cabecalho = h("div", null, voltar, h("div", {
+        style: {
           fontSize: 17,
+          fontWeight: 800
+        }
+      }, det.cliente), h("div", {
+        style: {
+          fontSize: 11,
+          color: "var(--text-secondary)",
+          marginBottom: 12
+        }
+      }, periodoTxt + (det.telefone ? " · 📞 " + det.telefone : "") + (det.ehAvulso ? " · reúne todas as vendas sem cliente cadastrado" : "")));
+      const ultimaCompraBox = det.ultimaCompra ? kpi("Última compra", fdt(det.ultimaCompra), null, ha(det.diasSemComprar) + " · " + fmt(det.ultimaCompraValor), true) : kpi("Última compra", "—", null, "sem compras registradas", true);
+      if (det.qtdCompras === 0) return h("div", null, cabecalho, h("div", {
+        style: {
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 8,
+          marginBottom: 10
+        }
+      }, ultimaCompraBox, kpi("A prazo em aberto", fmt(det.aPrazoAberto), det.aPrazoAberto > 0 ? "#ff3b3b" : null, det.aPrazoAbertoQtd + " venda(s)", true)), vazio("Nenhuma compra de " + det.cliente + " no período."));
+      const alertas = [];
+      if (det.aPrazoAberto > 0) alertas.push("💳 Tem " + fmt(det.aPrazoAberto) + " a prazo em aberto (" + det.aPrazoAbertoQtd + " venda(s)).");
+      if (det.semCusto) alertas.push("⚠️ Há itens vendidos sem custo cadastrado: o lucro deste cliente pode estar maior do que é.");
+      return h("div", null, cabecalho, h("div", {
+        style: {
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 8
+        }
+      }, kpi("Total comprado", fmt(det.total), "#f59e0b", det.qtdCompras + " compra(s) no período"), kpi("Ticket médio", fmt(det.ticketMedio), "#4ade80", "valor médio por compra"), ultimaCompraBox, kpi("Produto mais comprado", det.maisComprado ? det.maisComprado.nome : "—", "#E8682A", det.maisComprado ? fq(det.maisComprado.qtd) + " un · " + fmt(det.maisComprado.subtotal) : "", true)), alertas.map((t, i) => h("div", {
+        key: i,
+        style: {
+          marginTop: 10,
+          padding: "8px 10px",
+          borderRadius: 8,
+          background: "#f59e0b18",
+          border: "1px solid #f59e0b40",
+          fontSize: 12,
           color: "#f59e0b"
         }
-      }, fmt(det.total))), det.produtos.map((p, i) => linha(p.nome + " (" + (p.qtd % 1 !== 0 ? p.qtd.toFixed(2).replace(/\.?0+$/, "") : p.qtd) + "x)", fmt(p.subtotal), i === 0 ? "#f59e0b" : null)));
+      }, t)), subtitulo("🛒 O que mais compra"), det.produtos.slice(0, 5).map((p, i) => h("div", {
+        key: p.nome
+      }, linha(p.nome + " (" + fq(p.qtd) + "x)", fmt(p.subtotal), i === 0 ? "#f59e0b" : null))), det.produtos.length > 5 && h("div", {
+        style: {
+          fontSize: 11,
+          color: "var(--text-secondary)",
+          marginTop: 4
+        }
+      }, "+ " + (det.produtos.length - 5) + " produto(s). O PDF traz a lista completa."), det.maisValor && det.maisComprado && det.maisValor.nome !== det.maisComprado.nome && linha("Maior valor gasto em", det.maisValor.nome + " · " + fmt(det.maisValor.subtotal)), subtitulo("📊 Resumo"), linha("Lucro gerado no período", fmt(det.lucro), det.lucro >= 0 ? "#4ade80" : "#ff3b3b"), linha("Margem sobre as vendas", pct(det.margem)), (det.varejo.compras > 0 || det.atacado.compras > 0) && h("div", null, linha("🏪 Varejo (" + det.varejo.compras + " compra(s))", fmt(det.varejo.total)), linha("📦 Atacado (" + det.atacado.compras + " compra(s))", fmt(det.atacado.total), "#f59e0b")), subtitulo("🕒 Histórico geral (ignora o período)"), linha("Compras registradas", det.historicoCompras + " · " + fmt(det.historicoTotal)), linha("Cliente desde", det.primeiraCompra ? fd(det.primeiraCompra) : "—"), det.intervaloMedio != null && linha("Costuma comprar a cada", "≈ " + Math.round(det.intervaloMedio) + " dia(s)"), linha("A prazo em aberto", fmt(det.aPrazoAberto), det.aPrazoAberto > 0 ? "#ff3b3b" : null), det.pagamentos.length > 0 && h("div", null, subtitulo("💳 Como paga (período)"), det.pagamentos.map(pg => h("div", {
+        key: pg.forma
+      }, linha(pg.forma + " (" + pg.qtd + ")", fmt(pg.total))))), subtitulo("🧾 Compras recentes (período)"), det.recentes.map((v, i) => h("div", {
+        key: v.id || i,
+        style: {
+          padding: "6px 0",
+          borderBottom: "1px solid var(--bg-elevated)"
+        }
+      }, h("div", {
+        style: {
+          display: "flex",
+          justifyContent: "space-between",
+          fontSize: 12
+        }
+      }, h("span", null, fdt((v.date || "") + " " + (v.time || "")) + " · " + (v.payment || "")), h("b", null, fmt(v.total))), h("div", {
+        style: {
+          fontSize: 11,
+          color: "var(--text-secondary)",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap"
+        }
+      }, (v.items || []).map(it => fq(it.qty) + "x " + it.name).join(", ")))), h("div", {
+        style: {
+          fontSize: 11,
+          color: "var(--text-secondary)",
+          marginTop: 14
+        }
+      }, "Total = valor das vendas (já com desconto). Ticket médio = total ÷ nº de compras. Lucro: valor dos itens menos o custo, antes de descontos gerais do pedido."));
     }
+
+    // ── RANKING (lista clicável) ──
     if (d.relClientes.length === 0) return vazio("Nenhuma venda no período.");
-    return /*#__PURE__*/React.createElement("div", null, d.relClientes.map((c, i) => linha((i + 1) + ". " + c.nome + " (" + c.qtd + ")", fmt(c.total), i === 0 ? "#f59e0b" : null)));
-  }
-  if (tipo === "pagamento") {
-    if (d.relPagamento.length === 0) return vazio("Nenhuma venda no período.");
-    return /*#__PURE__*/React.createElement("div", null, d.relPagamento.map(p => linha(p.forma + " (" + p.qtd + ")", fmt(p.total))));
+    const ord = d.ordemCli || "total";
+    const opcoes = [["total", "💵 Maior valor"], ["qtd", "🛒 Mais compras"], ["ticket", "🎫 Ticket médio"], ["recente", "🕒 Mais recente"]];
+    const busca = (d.buscaCli || "").trim().toLowerCase();
+    const ranking = [...d.relClientes].sort((x, y) => ord === "recente" ? (y.ultima || "").localeCompare(x.ultima || "") : y[ord] - x[ord]).map((c, i) => ({
+      ...c,
+      rank: i + 1
+    }));
+    const filtrada = busca ? ranking.filter(c => c.nome.toLowerCase().includes(busca)) : ranking;
+    const LIMITE = 50;
+    return h("div", null, h("div", {
+      style: {
+        display: "flex",
+        gap: 6,
+        flexWrap: "wrap",
+        marginBottom: 10
+      }
+    }, opcoes.map(o => h("button", {
+      key: o[0],
+      onClick: () => d.onOrdemCli(o[0]),
+      style: {
+        ...S.btn(ord === o[0] ? "primary" : "ghost"),
+        padding: "6px 12px",
+        fontSize: 12
+      }
+    }, o[1]))), h("input", {
+      style: {
+        ...S.input,
+        fontSize: 13,
+        marginBottom: 8
+      },
+      placeholder: "Buscar cliente...",
+      value: d.buscaCli || "",
+      onChange: e => d.onBuscaCli(e.target.value)
+    }), h("div", {
+      style: {
+        fontSize: 11,
+        color: "var(--text-secondary)",
+        marginBottom: 6
+      }
+    }, d.relClientes.length + " cliente(s) com compra · " + periodoTxt + " · toque no nome para ver os detalhes"), filtrada.length === 0 ? vazio("Nenhum cliente encontrado.") : filtrada.slice(0, LIMITE).map(c => h("div", {
+      key: c.nome,
+      role: "button",
+      onClick: () => d.onSelCliente(c.nome),
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "10px 0",
+        borderBottom: "1px solid var(--bg-elevated)",
+        cursor: "pointer"
+      }
+    }, h("div", {
+      style: {
+        width: 26,
+        fontSize: 12,
+        fontWeight: 700,
+        color: c.rank <= 3 ? "#f59e0b" : "var(--text-secondary)",
+        textAlign: "center"
+      }
+    }, c.rank + "º"), h("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, h("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 700,
+        color: "#E8682A",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap"
+      }
+    }, c.nome, " ›"), h("div", {
+      style: {
+        fontSize: 11,
+        color: "var(--text-secondary)"
+      }
+    }, c.qtd + " compra(s) · ticket " + fmt(c.ticket) + " · última " + fd((c.ultima || "").split(" ")[0]))), h("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 700,
+        whiteSpace: "nowrap"
+      }
+    }, fmt(c.total)))), filtrada.length > LIMITE && h("div", {
+      style: {
+        fontSize: 11,
+        color: "var(--text-secondary)",
+        textAlign: "center",
+        padding: "10px 0"
+      }
+    }, "Mostrando " + LIMITE + " de " + filtrada.length + " · use a busca para achar os demais"));
   }
   if (tipo === "atacadoMais") {
     const a = d.relAtacado;
