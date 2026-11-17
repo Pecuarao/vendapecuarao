@@ -11401,12 +11401,16 @@ function EntregasPage(_ref24) {
     const editSubtotal = editPedForm.items.reduce((s, i) => s + i.qty * i.price, 0);
     const editDesconto = Math.min(Math.max(0, +editPedForm.desconto || 0), editSubtotal);
     const newTotal = editSubtotal - editDesconto;
+    const itensFinal = editPedForm.items.map(i => ({
+      ...i,
+      obs: (i.obs || "").trim()
+    }));
     persistE(pedidos.map(p => p.id === editPed.id ? {
       ...p,
       cliente: editPedForm.cliente,
       telefone: editPedForm.telefone,
       endereco: editPedForm.endereco,
-      itens: editPedForm.items,
+      itens: itensFinal,
       desconto: editDesconto,
       total: newTotal
     } : p));
@@ -11415,7 +11419,7 @@ function EntregasPage(_ref24) {
       persistSProp((sales || []).map(x => x.id === editPed.vendaId ? {
         ...x,
         customer: editPedForm.cliente,
-        items: editPedForm.items,
+        items: itensFinal,
         desconto: editDesconto,
         total: newTotal
       } : x));
@@ -11647,6 +11651,14 @@ function EntregasPage(_ref24) {
       doc.text(nomeLinhas, margemX, y);
       doc.text(fmt(i.price * i.qty), larguraMm - margemX, y, { align: "right" });
       y += 5.5 * nomeLinhas.length;
+      if (i.obs) {
+        const fsAntes = doc.getFontSize();
+        doc.setFontSize(10);
+        const obsLinhas = doc.splitTextToSize("obs: " + i.obs, larguraUtil - 4);
+        doc.text(obsLinhas, margemX + 2, y);
+        y += 4.5 * obsLinhas.length;
+        doc.setFontSize(fsAntes);
+      }
     });
     y += 1;
     doc.setLineDashPattern([1, 1], 0);
@@ -11857,7 +11869,7 @@ function EntregasPage(_ref24) {
         marginBottom: 8,
         lineHeight: 1.4
       }
-    }, ped.itens.map(i => i.qty + "× " + i.name).join(", ")), obsEdit[ped.id] !== undefined ? /*#__PURE__*/React.createElement("div", {
+    }, ped.itens.map(i => i.qty + "× " + i.name + (i.obs ? " (" + i.obs + ")" : "")).join(", ")), obsEdit[ped.id] !== undefined ? /*#__PURE__*/React.createElement("div", {
       style: {
         marginBottom: 8
       }
@@ -12464,6 +12476,31 @@ function EntregasPage(_ref24) {
     size: 12
   }))), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      ...S.lbl,
+      marginBottom: 3,
+      fontSize: 9
+    }
+  }, "Obs."), /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...S.input,
+      padding: "7px 10px",
+      fontSize: 13
+    },
+    placeholder: "Observação do item (opcional)",
+    value: item.obs || "",
+    onChange: e => setEditPedForm(f => ({
+      ...f,
+      items: f.items.map((x, i) => i === idx ? {
+        ...x,
+        obs: e.target.value
+      } : x)
+    }))
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
       fontSize: 11,
       color: "#E8682A",
       marginTop: 4,
@@ -12513,7 +12550,8 @@ function EntregasPage(_ref24) {
             name: p.name,
             qty: 1,
             price: precoDaModalidade(p, pedEhAtacado(editPed)),
-            cost: +(p.costPrice || 0)
+            cost: +(p.costPrice || 0),
+            obs: ""
           }]
         };
       });
@@ -16570,6 +16608,14 @@ function PDVApp() {
       doc.text(nomeLinhas, margemX, y);
       doc.text(fmt(i.price * i.qty), larguraMm - margemX, y, { align: "right" });
       y += 5.5 * nomeLinhas.length;
+      if (i.obs) {
+        const fsAntes = doc.getFontSize();
+        doc.setFontSize(10);
+        const obsLinhas = doc.splitTextToSize("obs: " + i.obs, larguraUtil - 4);
+        doc.text(obsLinhas, margemX + 2, y);
+        y += 4.5 * obsLinhas.length;
+        doc.setFontSize(fsAntes);
+      }
     });
     y += 1;
     doc.setLineDashPattern([1, 1], 0);
