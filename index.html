@@ -2357,6 +2357,89 @@ function BalancaCfgModal(_ref7b) {
 }
 
 // ── SCANNERS ───────────────────────────────────────────────────────────────────
+// ── Motor de leitura de código de barras pela câmera ─────────────────────────────
+// iPhone/Safari NÃO tem leitor nativo de código de barras (BarcodeDetector fica desativado),
+// então usa ZXing-C++ em WebAssembly. No Android/Chrome usa o leitor nativo do navegador.
+// Versão fixada de propósito (não usar "latest").
+const ZXING_VER = "3.1.6";
+const ZXING_BASE = "https://cdn.jsdelivr.net/npm/zxing-wasm@" + ZXING_VER + "/dist/";
+const BC_FORMATOS_NATIVO = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "itf"];
+const BC_FORMATOS_ZXING = ["EAN-13", "EAN-8", "UPC-A", "UPC-E", "Code128", "Code39", "ITF"];
+let _bcMotorPromise = null;
+const carregarMotorBarcode = () => {
+  if (_bcMotorPromise) return _bcMotorPromise;
+  _bcMotorPromise = (async () => {
+    const ehIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+    // 1) leitor nativo (Chrome/Android). No iOS é ignorado: lá o recurso é experimental e quebrado.
+    if (!ehIOS && typeof window.BarcodeDetector === "function") {
+      try {
+        const suportados = await window.BarcodeDetector.getSupportedFormats();
+        const formatos = BC_FORMATOS_NATIVO.filter(f => suportados.indexOf(f) >= 0);
+        if (formatos.indexOf("ean_13") >= 0) {
+          const det = new window.BarcodeDetector({
+            formats: formatos
+          });
+          return {
+            nome: "nativo",
+            girar: false,
+            detectar: async canvas => {
+              const r = await det.detect(canvas);
+              return r && r.length ? {
+                code: r[0].rawValue,
+                formato: r[0].format
+              } : null;
+            }
+          };
+        }
+      } catch (_) {}
+    }
+    // 2) ZXing-C++ (WebAssembly): funciona no iPhone
+    await new Promise((res, rej) => {
+      if (window.ZXingWASM) {
+        res();
+        return;
+      }
+      const sc = document.createElement("script");
+      sc.src = ZXING_BASE + "iife/reader/index.js";
+      sc.onload = () => res();
+      sc.onerror = () => rej(new Error("zxing-script"));
+      document.head.appendChild(sc);
+    });
+    const Z = window.ZXingWASM;
+    await Z.prepareZXingModule({
+      overrides: {
+        locateFile: (path, prefix) => path.endsWith(".wasm") ? ZXING_BASE + "reader/zxing_reader.wasm" : prefix + path
+      },
+      fireImmediately: true
+    });
+    const opcoes = {
+      formats: BC_FORMATOS_ZXING,
+      maxNumberOfSymbols: 1,
+      tryHarder: true,
+      tryRotate: true,
+      tryDownscale: true
+    };
+    return {
+      nome: "zxing",
+      girar: true,
+      detectar: async canvas => {
+        const img = canvas.getContext("2d", {
+          willReadFrequently: true
+        }).getImageData(0, 0, canvas.width, canvas.height);
+        const r = await Z.readBarcodes(img, opcoes);
+        const ok = r && r.find(x => x.isValid !== false && x.text);
+        return ok ? {
+          code: ok.text,
+          formato: ok.format
+        } : null;
+      }
+    };
+  })().catch(e => {
+    _bcMotorPromise = null;
+    throw e;
+  });
+  return _bcMotorPromise;
+};
 function ScannerBase(_ref8) {
   let S = _ref8.S,
     onClose = _ref8.onClose,
@@ -2371,37 +2454,36 @@ function ScannerBase(_ref8) {
     _useState4 = _slicedToArray(_useState3, 2),
     manual = _useState4[0],
     setManual = _useState4[1];
+  const _useState5 = useState(""),
+    _useState6 = _slicedToArray(_useState5, 2),
+    msg = _useState6[0],
+    setMsg = _useState6[1];
+  const _useState7 = useState(""),
+    _useState8 = _slicedToArray(_useState7, 2),
+    erroMsg = _useState8[0],
+    setErroMsg = _useState8[1];
   const videoRef = useRef(null);
   const streamRef = useRef(null);
-  const detRef = useRef(null);
-  const rafRef = useRef(null);
+  const timerRef = useRef(null);
   const activeRef = useRef(false);
-  const scannerDivRef = useRef(null);
-  const quaggaRef = useRef(null);
-  const handlerRef = useRef(null);
   const lastReadRef = useRef({
     code: "",
     n: 0,
     t: 0
   });
   const stopAll = () => {
-    var _detRef$current;
     activeRef.current = false;
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => t.stop());
       streamRef.current = null;
     }
-    // Remove o ouvinte de leitura (Quagga é global; sem isso eles se acumulam a cada abertura)
-    if (quaggaRef.current && handlerRef.current) {
+    if (videoRef.current) {
       try {
-        quaggaRef.current.offDetected(handlerRef.current);
-      } catch (_) {}
-      handlerRef.current = null;
-    }
-    if ((_detRef$current = detRef.current) !== null && _detRef$current !== void 0 && _detRef$current._quagga) {
-      try {
-        detRef.current._quagga.stop();
+        videoRef.current.srcObject = null;
       } catch (_) {}
     }
   };
@@ -2410,6 +2492,13 @@ function ScannerBase(_ref8) {
   const startScan = async () => {
     if (activeRef.current) return;
     activeRef.current = true;
+    lastReadRef.current = {
+      code: "",
+      n: 0,
+      t: 0
+    };
+    setErroMsg("");
+    setMsg("Iniciando câmera...");
     setStatus("scanning");
     const beep = () => {
       try {
@@ -2426,98 +2515,117 @@ function ScannerBase(_ref8) {
         o.stop(ac.currentTime + 0.12);
       } catch (_) {}
     };
-    // Carrega Quagga2 — funciona em iOS Safari, Android, Chrome
-    const loadQuagga = () => new Promise((res, rej) => {
-      if (window.Quagga) {
-        res(window.Quagga);
-        return;
-      }
-      const s = document.createElement("script");
-      s.src = "https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.7.4/dist/quagga.min.js";
-      s.onload = () => res(window.Quagga);
-      s.onerror = rej;
-      document.head.appendChild(s);
-    });
-    try {
-      const Quagga = await loadQuagga();
-      quaggaRef.current = Quagga;
-      // Garante que o elemento de vídeo existe
-      await new Promise(r => setTimeout(r, 300));
-      if (!scannerDivRef.current) {
-        setStatus("error");
-        return;
-      }
-      Quagga.init({
-        inputStream: {
-          name: "Live",
-          type: "LiveStream",
-          target: scannerDivRef.current,
-          constraints: {
-            facingMode: "environment",
-            width: {
-              ideal: 1280
-            },
-            height: {
-              ideal: 720
-            }
-          }
-        },
-        locator: {
-          patchSize: "medium",
-          halfSample: true
-        },
-        numOfWorkers: 0,
-        frequency: 10,
-        decoder: {
-          readers: ["ean_reader", "ean_8_reader", "code_128_reader", "code_39_reader", "upc_reader", "upc_e_reader"]
-        },
-        locate: true
-      }, err => {
-        if (err) {
-          console.error("Quagga init:", err);
-          setStatus("error");
-          return;
-        }
-        if (!activeRef.current) {
-          Quagga.stop();
-          return;
-        }
-        Quagga.start();
-        detRef.current = {
-          _quagga: Quagga
+    // Só aceita depois de 2 leituras iguais seguidas (até 1,5 s entre elas): evita adicionar produto errado.
+    const confirmar = code => {
+      const agora = Date.now();
+      const lr = lastReadRef.current;
+      if (lr.code === code && agora - lr.t <= 1500) {
+        lr.n += 1;
+        lr.t = agora;
+      } else {
+        lastReadRef.current = {
+          code,
+          n: 1,
+          t: agora
         };
-      });
-      const onDetectedHandler = result => {
-        var _result$codeResult;
-        const code = result === null || result === void 0 || (_result$codeResult = result.codeResult) === null || _result$codeResult === void 0 ? void 0 : _result$codeResult.code;
-        if (!code || !activeRef.current) return;
-        // Só aceita depois de 2 leituras iguais seguidas (até 1,5 s entre elas):
-        // uma leitura isolada da câmera às vezes sai errada e adicionaria o produto errado.
-        const agora = Date.now();
-        const lr = lastReadRef.current;
-        if (lr.code === code && agora - lr.t <= 1500) {
-          lr.n += 1;
-          lr.t = agora;
-        } else {
-          lastReadRef.current = {
-            code,
-            n: 1,
-            t: agora
-          };
-          return;
+        return;
+      }
+      if (lr.n < 2) return;
+      stopAll();
+      beep();
+      onCode(code);
+    };
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error("sem-camera");
+      // Câmera traseira em 1080p: a 15-25 cm o código ocupa poucos pixels, então resolução importa
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: {
+            ideal: "environment"
+          },
+          width: {
+            ideal: 1920
+          },
+          height: {
+            ideal: 1080
+          }
         }
-        if (lastReadRef.current.n < 2) return;
-        Quagga.stop();
-        stopAll();
-        beep();
-        onCode(code);
+      });
+      if (!activeRef.current) {
+        stream.getTracks().forEach(t => t.stop());
+        return;
+      }
+      streamRef.current = stream;
+      // foco contínuo onde o navegador permite (Android/Chrome); o iPhone ignora e já foca sozinho
+      try {
+        const track = stream.getVideoTracks()[0];
+        const caps = track && track.getCapabilities ? track.getCapabilities() : {};
+        if (caps.focusMode && caps.focusMode.indexOf("continuous") >= 0) await track.applyConstraints({
+          advanced: [{
+            focusMode: "continuous"
+          }]
+        });
+      } catch (_) {}
+      // o <video> só existe depois que a tela entra em "scanning"
+      for (let k = 0; k < 40 && !videoRef.current; k++) await new Promise(r => setTimeout(r, 25));
+      const v = videoRef.current;
+      if (!v || !activeRef.current) throw new Error("sem-video");
+      v.muted = true;
+      v.setAttribute("muted", "");
+      v.setAttribute("playsinline", "");
+      v.setAttribute("webkit-playsinline", "");
+      v.srcObject = stream;
+      await v.play();
+      setMsg("Carregando leitor...");
+      const motor = await carregarMotorBarcode();
+      if (!activeRef.current) return;
+      setMsg("Aponte para o código de barras");
+      const cv = document.createElement("canvas");
+      const ctx = cv.getContext("2d", {
+        willReadFrequently: true
+      });
+      // ZXing lê bem até ~20° de inclinação: alterna o giro do quadro (0°, +25°, −25°) para cobrir ~45°
+      const angulos = motor.girar ? [0, 25, -25] : [0];
+      let passo = 0;
+      const tick = async () => {
+        if (!activeRef.current) return;
+        const t0 = performance.now();
+        try {
+          if (v.readyState >= 2 && v.videoWidth > 0) {
+            const esc = Math.min(1, 1280 / Math.max(v.videoWidth, v.videoHeight));
+            const W = Math.round(v.videoWidth * esc),
+              H = Math.round(v.videoHeight * esc);
+            if (cv.width !== W || cv.height !== H) {
+              cv.width = W;
+              cv.height = H;
+            }
+            const ang = angulos[passo++ % angulos.length];
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            if (ang) {
+              ctx.fillStyle = "#808080";
+              ctx.fillRect(0, 0, W, H);
+              ctx.translate(W / 2, H / 2);
+              ctx.rotate(ang * Math.PI / 180);
+              ctx.drawImage(v, -W / 2, -H / 2, W, H);
+            } else {
+              ctx.drawImage(v, 0, 0, W, H);
+            }
+            const r = await motor.detectar(cv);
+            if (r && r.code && activeRef.current) confirmar(r.code);
+          }
+        } catch (e) {
+          console.warn("leitura:", e);
+        }
+        if (activeRef.current) timerRef.current = setTimeout(tick, Math.max(0, 40 - (performance.now() - t0)));
       };
-      handlerRef.current = onDetectedHandler;
-      Quagga.onDetected(onDetectedHandler);
+      tick();
     } catch (e) {
       console.error("Scanner error:", e);
+      const nome = e && e.name || "";
+      setErroMsg(nome === "NotAllowedError" || nome === "SecurityError" ? "Permissão da câmera negada. No iPhone: Ajustes › Safari › Câmera (ou toque em aA › Ajustes do Site) e permita. Depois tente de novo." : e && e.message === "zxing-script" ? "Não foi possível carregar o leitor (sem internet?). Use o campo abaixo." : "Câmera indisponível. Use o campo abaixo.");
+      stopAll();
       setStatus("error");
-      activeRef.current = false;
     }
   };
   const handleClose = () => {
@@ -2599,41 +2707,41 @@ function ScannerBase(_ref8) {
     style: {
       width: "100%",
       flex: 1,
-      position: "relative"
+      position: "relative",
+      overflow: "hidden",
+      background: "#000"
     }
   }, /*#__PURE__*/React.createElement("video", {
     ref: videoRef,
-    style: {
-      display: "none"
-    },
     playsInline: true,
     muted: true,
-    autoPlay: true
-  }), /*#__PURE__*/React.createElement("div", {
-    ref: scannerDivRef,
-    id: "scanner-container",
+    autoPlay: true,
     style: {
+      position: "absolute",
+      inset: 0,
       width: "100%",
       height: "100%",
-      position: "absolute",
-      inset: 0
+      objectFit: "cover"
     }
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "absolute",
       inset: 0,
       display: "flex",
+      flexDirection: "column",
       alignItems: "center",
       justifyContent: "center",
-      pointerEvents: "none"
+      pointerEvents: "none",
+      padding: 16
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      width: 260,
-      height: 110,
+      width: "88%",
+      maxWidth: 460,
+      height: 150,
       border: "2px solid #22d3ee",
-      borderRadius: 8,
-      boxShadow: "0 0 0 2000px rgba(0,0,0,.5)",
+      borderRadius: 10,
+      boxShadow: "0 0 0 2000px rgba(0,0,0,.35)",
       position: "relative"
     }
   }, /*#__PURE__*/React.createElement("div", {
@@ -2646,7 +2754,26 @@ function ScannerBase(_ref8) {
       background: "linear-gradient(90deg,transparent,#22d3ee,transparent)",
       animation: "scanline 1.5s ease-in-out infinite"
     }
-  })))), status === "error" && /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 18,
+      textAlign: "center",
+      color: "#fff",
+      fontSize: 13,
+      fontWeight: 600,
+      textShadow: "0 1px 4px #000",
+      maxWidth: 320
+    }
+  }, msg), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 6,
+      textAlign: "center",
+      color: "#cbd5e1",
+      fontSize: 11,
+      textShadow: "0 1px 4px #000",
+      maxWidth: 320
+    }
+  }, "Afaste o celular uns 15 a 25 cm até o código ficar nítido. Não precisa encher o quadro."))), status === "error" && /*#__PURE__*/React.createElement("div", {
     style: {
       textAlign: "center",
       padding: 24
@@ -2661,7 +2788,7 @@ function ScannerBase(_ref8) {
       color: "#F07030",
       fontSize: 12
     }
-  }, "C\xE2mera indispon\xEDvel. Use o campo abaixo."))), /*#__PURE__*/React.createElement("div", {
+  }, erroMsg || "Câmera indisponível. Use o campo abaixo."))), /*#__PURE__*/React.createElement("div", {
     style: {
       padding: "14px 18px 32px",
       background: "rgba(0,0,0,.92)",
@@ -2681,7 +2808,7 @@ function ScannerBase(_ref8) {
       gap: 8
     }
   }, /*#__PURE__*/React.createElement("input", {
-    autoFocus: true,
+    autoFocus: !(typeof window !== "undefined" && window.matchMedia && window.matchMedia("(pointer: coarse)").matches),
     style: {
       ...S.input,
       flex: 1,
